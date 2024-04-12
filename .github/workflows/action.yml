@@ -5,6 +5,9 @@ on:
     - cron: "50 23 * * 5" # UST 기준의 크론. UST 23:50 는 KST 08:50
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
