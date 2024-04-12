@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.7]
+        python-version: [ 3.7 ]
 
     steps:
       - uses: actions/checkout@v2
@@ -42,3 +42,6 @@ jobs:
       - name: Run for buying Lotto!
         run: |
           python ./buy_lotto.py ${{secrets.USER_ID}} ${{secrets.USER_PW}} ${{secrets.SLACK_BOT_TOKEN}} ${{secrets.SLACK_CHANNEL}} ${{secrets.BUY_COUNT}}
+
+      - name: Keep workflow alive
+        uses: gautamkrishnar/keepalive-workflow@v2
