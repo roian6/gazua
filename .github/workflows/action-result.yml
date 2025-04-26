@@ -5,11 +5,6 @@ on:
     - cron: "20 13 * * 6" # UST 기준의 크론. UST 13:20 는 KST 22:20, 매주 토요일 20시 35분경 발표 시작
   workflow_dispatch:
 
-permissions:
-  contents: write
-  actions: write
-
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,9 +13,9 @@ jobs:
         python-version: [3.12]
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Set up python ${{ matrix.python-version }}
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -50,6 +45,3 @@ jobs:
       - name: Run for checking the result of Lotto!
         run: |
           python ./check_result.py ${{secrets.USER_ID}} ${{secrets.USER_PW}} ${{secrets.SLACK_BOT_TOKEN}} ${{secrets.SLACK_CHANNEL}} ${{secrets.BUY_COUNT}}
-
-      - name: Keep workflow alive
-        uses: gautamkrishnar/keepalive-workflow@v2
