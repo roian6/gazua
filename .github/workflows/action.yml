@@ -5,9 +5,6 @@ on:
     - cron: "50 23 * * 5" # UST 기준의 크론. UST 23:50 는 KST 08:50
   workflow_dispatch:
 
-permissions:
-  actions: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -48,6 +45,3 @@ jobs:
       - name: Run for buying Lotto!
         run: |
           python ./buy_lotto.py ${{secrets.USER_ID}} ${{secrets.USER_PW}} ${{secrets.SLACK_BOT_TOKEN}} ${{secrets.SLACK_CHANNEL}} ${{secrets.BUY_COUNT}}
-
-      - name: Keep workflow alive
-        uses: gautamkrishnar/keepalive-workflow@v2
