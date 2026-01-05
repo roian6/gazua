@@ -286,7 +286,7 @@ def run(playwright: Playwright, config: Config) -> None:
             raise BalanceError()
 
         page.goto(GAME_URL, wait_until="domcontentloaded")
-        page.wait_for_load_state("networkidle", timeout=config.timeout_ms)
+        page.wait_for_load_state("load", timeout=config.timeout_ms)
         
         if "/login" in page.url.lower() or "login" in page.url.lower():
             raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
