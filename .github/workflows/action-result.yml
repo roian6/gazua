@@ -31,4 +31,7 @@ jobs:
             --user-pw "${{ secrets.USER_PW }}" \
             --slack-token "${{ secrets.SLACK_BOT_TOKEN }}" \
             --slack-channel "${{ secrets.SLACK_CHANNEL }}" \
+            --proxy-user "${{ secrets.PROXY_USER }}" \
+            --proxy-pw "${{ secrets.PROXY_PW }}" \
+            --proxy-address "${{ secrets.PROXY_ADDRESS }}" \
             --headless

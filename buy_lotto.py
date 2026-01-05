@@ -54,6 +54,9 @@ class Config:
     timeout_ms: int
     queue_timeout_ms: int
     slow_mo: int
+    proxy_user: Optional[str] = None
+    proxy_pw: Optional[str] = None
+    proxy_address: Optional[str] = None
 
 
 def parse_bool(value: Optional[str], default: bool = False) -> bool:
@@ -82,6 +85,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-ms", type=int, default=30000)
     parser.add_argument("--queue-timeout-ms", type=int, default=180000)
     parser.add_argument("--slow-mo", type=int, default=0)
+    parser.add_argument("--proxy-user", dest="proxy_user")
+    parser.add_argument("--proxy-pw", dest="proxy_pw")
+    parser.add_argument("--proxy-address", dest="proxy_address")
     return parser.parse_args()
 
 
@@ -131,6 +137,10 @@ def load_config() -> Config:
 
     if count <= 0:
         raise SystemExit("COUNT must be a positive integer.")
+    
+    proxy_user = args.proxy_user or os.getenv("PROXY_USER")
+    proxy_pw = args.proxy_pw or os.getenv("PROXY_PW")
+    proxy_address = args.proxy_address or os.getenv("PROXY_ADDRESS")
 
     return Config(
         user_id=user_id,
@@ -145,6 +155,9 @@ def load_config() -> Config:
         timeout_ms=args.timeout_ms,
         queue_timeout_ms=args.queue_timeout_ms,
         slow_mo=args.slow_mo,
+        proxy_user=proxy_user,
+        proxy_pw=proxy_pw,
+        proxy_address=proxy_address,
     )
 
 
@@ -250,10 +263,20 @@ def run(playwright: Playwright, config: Config) -> None:
     context = None
     page = None
     try:
-        browser = playwright.chromium.launch(
-            headless=config.headless,
-            slow_mo=config.slow_mo if config.slow_mo > 0 else None,
-        )
+        launch_options = {
+            "headless": config.headless,
+            "slow_mo": config.slow_mo if config.slow_mo > 0 else None,
+        }
+        if config.proxy_address:
+            launch_options["proxy"] = {
+                "server": f"http://{config.proxy_address}",
+            }
+            if config.proxy_user and config.proxy_pw:
+                launch_options["proxy"]["username"] = config.proxy_user
+                launch_options["proxy"]["password"] = config.proxy_pw
+
+        browser = playwright.chromium.launch(**launch_options)
+
         # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화 + Stealth
         # 동행복권은 모바일/PC 구분을 엄격하게 하므로 PC 환경을 완벽하게 흉내내야 함
         context = browser.new_context(

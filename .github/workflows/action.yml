@@ -32,6 +32,9 @@ jobs:
             --slack-token "${{ secrets.SLACK_BOT_TOKEN }}" \
             --slack-channel "${{ secrets.SLACK_CHANNEL }}" \
             --count "${{ secrets.BUY_COUNT }}" \
+            --proxy-user "${{ secrets.PROXY_USER }}" \
+            --proxy-pw "${{ secrets.PROXY_PW }}" \
+            --proxy-address "${{ secrets.PROXY_ADDRESS }}" \
             --headless \
             --debug \
             --debug-artifacts
