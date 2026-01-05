@@ -18,11 +18,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        shell: bash
         run: |
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
 
       - name: Run Lotto Buy Script
+        shell: bash
         run: |
           python ./buy_lotto.py \
             --user-id "${{ secrets.USER_ID }}" \
