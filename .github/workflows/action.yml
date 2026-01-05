@@ -30,4 +30,14 @@ jobs:
             --slack-token "${{ secrets.SLACK_BOT_TOKEN }}" \
             --slack-channel "${{ secrets.SLACK_CHANNEL }}" \
             --count "${{ secrets.BUY_COUNT }}" \
-            --headless
+            --headless \
+            --debug \
+            --debug-artifacts
+
+      - name: Upload debug artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-artifacts
+          path: artifacts/
+          retention-days: 7

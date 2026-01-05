@@ -281,8 +281,20 @@ def run(playwright: Playwright, config: Config) -> None:
             raise BalanceError()
 
         page.goto(GAME_URL, wait_until="domcontentloaded")
-        page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
-        page.wait_for_load_state("load")
+        page.wait_for_load_state("networkidle", timeout=config.timeout_ms)
+        
+        if "/login" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
+        
+        try:
+            page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
+        except Exception as exc:
+            if config.debug_artifacts:
+                capture_screenshot(page, config.debug_dir, "game_page_error")
+                save_page_html(page, config.debug_dir, "game_page_error")
+            LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
+            raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
+        
         game_frame = page.frame(name="ifrm_tab")
         if not game_frame:
             raise RuntimeError("게임 프레임을 찾지 못했습니다.")
