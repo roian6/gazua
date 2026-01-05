@@ -275,6 +275,7 @@ def run(playwright: Playwright, config: Config) -> None:
         page.set_default_navigation_timeout(config.timeout_ms)
 
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
+        LOG.info("로그인 후 현재 URL: %s", page.url)
 
         is_sale_available, sale_status, sale_message = get_sale_status()
         if not is_sale_available:
@@ -298,6 +299,9 @@ def run(playwright: Playwright, config: Config) -> None:
         page.wait_for_load_state("load", timeout=config.timeout_ms)
         
         if "/login" in page.url.lower() or "login" in page.url.lower():
+            # 리다이렉트된 페이지의 내용 확인
+            body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
+            LOG.error("페이지 내용 덤프: %s", body_text)
             raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
         
         try:
@@ -306,7 +310,15 @@ def run(playwright: Playwright, config: Config) -> None:
             if config.debug_artifacts:
                 capture_screenshot(page, config.debug_dir, "game_page_error")
                 save_page_html(page, config.debug_dir, "game_page_error")
+            
+            # 페이지 내용 덤프 추가
+            try:
+                body_text = page.locator("body").inner_text()[:1000].replace("\n", " ")
+            except:
+                body_text = "텍스트 추출 실패"
+                
             LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
+            LOG.error("실패 시점 페이지 내용: %s", body_text)
             raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
         
         game_frame = page.frame(name="ifrm_tab")
