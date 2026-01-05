@@ -13,9 +13,9 @@ def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     page.wait_for_selector("#inpUserId", timeout=timeout_ms)
     page.fill("#inpUserId", user_id)
     page.fill("#inpUserPswdEncn", user_pw)
-    with page.expect_navigation():
+    with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
         page.click("#btnLogin")
-    page.wait_for_load_state("load")
+    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
     if "/login" in page.url:
         raise RuntimeError("로그인에 실패했거나 추가 인증이 필요합니다.")
 
