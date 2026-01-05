@@ -280,8 +280,9 @@ def run(playwright: Playwright, config: Config) -> None:
         if 1000 * config.count > balance:
             raise BalanceError()
 
-        page.goto(GAME_URL)
-        page.wait_for_selector("iframe#ifrm_tab")
+        page.goto(GAME_URL, wait_until="domcontentloaded")
+        page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
+        page.wait_for_load_state("load")
         game_frame = page.frame(name="ifrm_tab")
         if not game_frame:
             raise RuntimeError("게임 프레임을 찾지 못했습니다.")
