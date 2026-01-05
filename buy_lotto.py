@@ -255,12 +255,15 @@ def run(playwright: Playwright, config: Config) -> None:
             slow_mo=config.slow_mo if config.slow_mo > 0 else None,
         )
         # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화 + Stealth
+        # 동행복권은 모바일/PC 구분을 엄격하게 하므로 PC 환경을 완벽하게 흉내내야 함
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             is_mobile=False,
             has_touch=False,
             device_scale_factor=1.0,
+            locale="ko-KR",
+            timezone_id="Asia/Seoul",
         )
         
         # WebDriver 감지 우회 스크립트 주입
@@ -268,6 +271,9 @@ def run(playwright: Playwright, config: Config) -> None:
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
+            // 모바일 속성 제거
+            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+            window.navigator.chrome = { runtime: {} };
         """)
         
         page = context.new_page()
@@ -295,31 +301,47 @@ def run(playwright: Playwright, config: Config) -> None:
         if 1000 * config.count > balance:
             raise BalanceError()
 
-        page.goto(GAME_URL, wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=config.timeout_ms)
-        
-        if "/login" in page.url.lower() or "login" in page.url.lower():
-            # 리다이렉트된 페이지의 내용 확인
-            body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
-            LOG.error("페이지 내용 덤프: %s", body_text)
-            raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
-        
-        try:
-            page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
-        except Exception as exc:
-            if config.debug_artifacts:
-                capture_screenshot(page, config.debug_dir, "game_page_error")
-                save_page_html(page, config.debug_dir, "game_page_error")
-            
-            # 페이지 내용 덤프 추가
+        # 게임 페이지로 이동 (리다이렉트 대응 로직 포함)
+        for attempt in range(3):
             try:
-                body_text = page.locator("body").inner_text()[:1000].replace("\n", " ")
-            except:
-                body_text = "텍스트 추출 실패"
+                LOG.info(f"게임 페이지 이동 시도 {attempt + 1}/3")
+                page.goto(GAME_URL, wait_until="domcontentloaded")
+                page.wait_for_load_state("load", timeout=config.timeout_ms)
                 
-            LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
-            LOG.error("실패 시점 페이지 내용: %s", body_text)
-            raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
+                # 모바일 페이지로 리다이렉트되었는지 확인
+                if "m.dhlottery.co.kr" in page.url:
+                    LOG.warning(f"모바일 페이지로 리다이렉트됨: {page.url}")
+                    # PC 버전 강제 쿠키 시도 (추측)
+                    context.add_cookies([
+                        {"name": "PC_VER", "value": "Y", "domain": ".dhlottery.co.kr", "path": "/"}
+                    ])
+                    time.sleep(1)
+                    continue
+
+                if "/login" in page.url.lower() or "login" in page.url.lower():
+                     # 리다이렉트된 페이지의 내용 확인
+                    body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
+                    LOG.error("페이지 내용 덤프: %s", body_text)
+                    raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
+            
+                page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
+                # 성공하면 루프 탈출
+                break
+            except Exception as exc:
+                if attempt == 2: # 마지막 시도에서도 실패하면 에러 처리
+                    if config.debug_artifacts:
+                        capture_screenshot(page, config.debug_dir, "game_page_error")
+                        save_page_html(page, config.debug_dir, "game_page_error")
+                    
+                    try:
+                        body_text = page.locator("body").inner_text()[:1000].replace("\n", " ")
+                    except:
+                        body_text = "텍스트 추출 실패"
+                        
+                    LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
+                    LOG.error("실패 시점 페이지 내용: %s", body_text)
+                    raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
+                time.sleep(2)
         
         game_frame = page.frame(name="ifrm_tab")
         if not game_frame:
