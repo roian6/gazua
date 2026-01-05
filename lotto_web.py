@@ -9,7 +9,7 @@ from lotto_utils import LOGIN_URL
 
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     # 프록시 환경 고려하여 domcontentloaded로 완화
-    page.goto(LOGIN_URL, wait_until="domcontentloaded")
+    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
     page.wait_for_selector("#inpUserId", state="visible", timeout=timeout_ms)
     
     # 입력 필드 포커스 및 입력

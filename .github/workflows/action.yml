@@ -38,7 +38,7 @@ jobs:
             --headless \
             --debug \
             --debug-artifacts \
-            --timeout-ms 90000
+            --timeout-ms 180000
 
       - name: Upload debug artifacts
         if: failure()
