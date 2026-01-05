@@ -1,69 +1,188 @@
-import re
+import argparse
+import logging
+import os
 import sys
 import time
-from datetime import datetime
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
-import pytz
-from requests import post, Response, Session
 from playwright.sync_api import Playwright, sync_playwright
-from bs4 import BeautifulSoup
 
-RUN_FILE_NAME = sys.argv[0]
+from lotto_utils import (
+    BASE_URL,
+    build_session_from_context,
+    fetch_today_purchase_numbers,
+    fetch_user_balance,
+    get_now,
+    get_sale_status,
+    load_env_file,
+    post_to_slack,
+)
+from lotto_web import capture_screenshot, login, save_page_html, wait_for_overlay_hidden
 
-# 동행복권 아이디와 패스워드를 설정
-USER_ID = sys.argv[1]
-USER_PW = sys.argv[2]
+GAME_URL = "https://el.dhlottery.co.kr/game/TotalGame.jsp?LottoId=LO40"
 
-# SLACK 설정
-SLACK_API_URL = "https://slack.com/api/chat.postMessage"
-SLACK_BOT_TOKEN = sys.argv[3]
-SLACK_CHANNEL = sys.argv[4]
-
-# 구매 개수를 설정
-COUNT = sys.argv[5]
+LOG = logging.getLogger(__name__)
 
 
 class BalanceError(Exception):
-    def __init__(self, message="An error occurred", code=None):
-        self.message = message
-        self.code = code
-        super().__init__(self.message)
-
-    def __str__(self):
-        return f"{self.message} - Code: {self.code}" if self.code else self.message
+    def __init__(self, message="예치금이 부족합니다."):
+        super().__init__(message)
 
 
-def get_now() -> datetime:
-    # 한국 시간대 객체 생성
-    korea_tz = pytz.timezone("Asia/Seoul")
-    korea_time = datetime.now(pytz.utc).astimezone(korea_tz)
-    return korea_time
+class PurchaseUnavailableError(Exception):
+    def __init__(self, message="현재 구매 불가 시간대입니다."):
+        super().__init__(message)
 
 
-def hook_slack(message: str) -> Response:
+class WeeklyLimitExceededError(Exception):
+    def __init__(self, message="주간 구매 한도가 소진되었습니다."):
+        super().__init__(message)
+
+
+@dataclass
+class Config:
+    user_id: str
+    user_pw: str
+    slack_token: str
+    slack_channel: str
+    count: int
+    headless: bool
+    debug: bool
+    debug_artifacts: bool
+    debug_dir: str
+    timeout_ms: int
+    queue_timeout_ms: int
+    slow_mo: int
+
+
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="동행복권 로또 자동 구매")
+    parser.add_argument("user_id", nargs="?")
+    parser.add_argument("user_pw", nargs="?")
+    parser.add_argument("slack_token", nargs="?")
+    parser.add_argument("slack_channel", nargs="?")
+    parser.add_argument("count", nargs="?")
+    parser.add_argument("--user-id", dest="user_id_opt")
+    parser.add_argument("--user-pw", dest="user_pw_opt")
+    parser.add_argument("--slack-token", dest="slack_token_opt")
+    parser.add_argument("--slack-channel", dest="slack_channel_opt")
+    parser.add_argument("--count", dest="count_opt", type=int)
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--debug-artifacts", action="store_true")
+    parser.add_argument("--debug-dir", default=None)
+    parser.add_argument("--timeout-ms", type=int, default=30000)
+    parser.add_argument("--queue-timeout-ms", type=int, default=180000)
+    parser.add_argument("--slow-mo", type=int, default=0)
+    return parser.parse_args()
+
+
+def load_config() -> Config:
+    load_env_file()
+    args = parse_args()
+
+    user_id = args.user_id_opt or args.user_id or os.getenv("DHL_USER_ID")
+    user_pw = args.user_pw_opt or args.user_pw or os.getenv("DHL_USER_PW")
+    slack_token = (
+        args.slack_token_opt or args.slack_token or os.getenv("SLACK_BOT_TOKEN")
+    )
+    slack_channel = (
+        args.slack_channel_opt or args.slack_channel or os.getenv("SLACK_CHANNEL")
+    )
+
+    count_raw = (
+        args.count_opt
+        if args.count_opt is not None
+        else args.count or os.getenv("LOTTO_COUNT")
+    )
+    count = int(count_raw) if count_raw is not None else 1
+
+    headless_env = parse_bool(os.getenv("HEADLESS"), default=True)
+    if args.headed:
+        headless = False
+    elif args.headless:
+        headless = True
+    else:
+        headless = headless_env
+
+    debug = args.debug or parse_bool(os.getenv("DEBUG"))
+    debug_artifacts = args.debug_artifacts or parse_bool(os.getenv("DEBUG_ARTIFACTS"))
+    debug_dir = args.debug_dir or os.getenv("DEBUG_DIR") or "artifacts"
+
+    missing = []
+    if not user_id:
+        missing.append("DHL_USER_ID")
+    if not user_pw:
+        missing.append("DHL_USER_PW")
+    if not slack_token:
+        missing.append("SLACK_BOT_TOKEN")
+    if not slack_channel:
+        missing.append("SLACK_CHANNEL")
+    if missing:
+        raise SystemExit(f"Missing required settings: {', '.join(missing)}")
+
+    if count <= 0:
+        raise SystemExit("COUNT must be a positive integer.")
+
+    return Config(
+        user_id=user_id,
+        user_pw=user_pw,
+        slack_token=slack_token,
+        slack_channel=slack_channel,
+        count=count,
+        headless=headless,
+        debug=debug,
+        debug_artifacts=debug_artifacts,
+        debug_dir=debug_dir,
+        timeout_ms=args.timeout_ms,
+        queue_timeout_ms=args.queue_timeout_ms,
+        slow_mo=args.slow_mo,
+    )
+
+
+def setup_logging(debug: bool) -> None:
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
+
+
+def hook_slack(config: Config, message: str) -> None:
     korea_time_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
     payload = {
         "text": f"> {korea_time_str} *로또 자동 구매 봇 알림* \n{message}",
-        "channel": SLACK_CHANNEL,
+        "channel": config.slack_channel,
     }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-    }
-    res = post(SLACK_API_URL, json=payload, headers=headers)
-    return res
+    response = post_to_slack(payload, config.slack_token, logger=LOG)
+    if response is None:
+        return
+    try:
+        data = response.json()
+        if not data.get("ok", True):
+            LOG.warning("Slack error: %s", data)
+    except ValueError:
+        return
 
 
-def hook_slack_btn() -> Response:
+def hook_slack_btn(config: Config) -> None:
     korea_time_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
     payload = {
-        "channel": SLACK_CHANNEL,
+        "channel": config.slack_channel,
         "blocks": [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"> {korea_time_str} *로또 자동 구매 봇 알림* \n예치금이 부족합니다! 충전을 해주세요!",
+                    "text": (
+                        f"> {korea_time_str} *로또 자동 구매 봇 알림* "
+                        "\n예치금이 부족합니다! 충전을 해주세요!"
+                    ),
                 },
             },
             {
@@ -73,135 +192,241 @@ def hook_slack_btn() -> Response:
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "충전하러 가기",  # 버튼에 표시될 텍스트
+                            "text": "충전하러 가기",
                             "emoji": True,
                         },
-                        "url": "https://dhlottery.co.kr/payment.do?method=payment",  # 사용자를 리디렉션할 URL
+                        "url": "https://dhlottery.co.kr/payment.do?method=payment",
                         "action_id": "button_action",
                     }
                 ],
             },
         ],
     }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-    }
-    res = post(SLACK_API_URL, json=payload, headers=headers)
-    return res
+    post_to_slack(payload, config.slack_token, logger=LOG)
 
 
-def run(playwright: Playwright) -> None:
+def safe_click(target, selector: str, timeout_ms: int = 2000) -> bool:
     try:
-        # ================================================================ #
-        # 초기 세팅 및 로그인
-        # ================================================================ #
+        target.locator(selector).click(timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
 
-        browser = playwright.chromium.launch(headless=True)  # chrome 브라우저를 실행
+
+def click_any(target, selectors, timeout_ms: int = 2000) -> bool:
+    for selector in selectors:
+        if safe_click(target, selector, timeout_ms=timeout_ms):
+            return True
+    return False
+
+
+def read_layer_message(layer) -> str:
+    try:
+        return layer.locator(".layer-message").inner_text().strip()
+    except Exception:
+        return ""
+
+
+def wait_for_dialog(target, timeout_ms: int) -> Optional[Tuple[str, str]]:
+    confirm_layer = target.locator("#popupLayerConfirm")
+    alert_layer = target.locator("#popupLayerAlert")
+    end_time = time.time() + timeout_ms / 1000
+
+    while time.time() < end_time:
+        if confirm_layer.is_visible():
+            message = read_layer_message(confirm_layer)
+            safe_click(confirm_layer, "input[value='확인']")
+            return "confirm", message
+        if alert_layer.is_visible():
+            message = read_layer_message(alert_layer)
+            safe_click(alert_layer, "input[value='확인']")
+            return "alert", message
+        time.sleep(0.5)
+    return None
+
+
+def run(playwright: Playwright, config: Config) -> None:
+    browser = None
+    context = None
+    page = None
+    try:
+        browser = playwright.chromium.launch(
+            headless=config.headless,
+            slow_mo=config.slow_mo if config.slow_mo > 0 else None,
+            channel="chrome",
+        )
         context = browser.new_context()
-
         page = context.new_page()
-        page.goto("https://dhlottery.co.kr/user.do?method=login")
-        page.click('[placeholder="아이디"]')
-        page.fill('[placeholder="아이디"]', USER_ID)
-        page.press('[placeholder="아이디"]', "Tab")
-        page.fill('[placeholder="비밀번호"]', USER_PW)
-        page.press('[placeholder="비밀번호"]', "Tab")
+        page.set_default_timeout(config.timeout_ms)
+        page.set_default_navigation_timeout(config.timeout_ms)
 
-        # Press Enter
-        # with page.expect_navigation(url="https://ol.dhlottery.co.kr/olotto/game/game645.do"):
-        with page.expect_navigation():
-            page.press('form[name="jform"] >> text=로그인', "Enter")
-        time.sleep(4)
+        login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
 
-        # 로그인 이후 기본 정보 체크 & 예치금 알림
-        page.goto("https://dhlottery.co.kr/common.do?method=main")
-        money_info = page.query_selector("ul.information").inner_text()
-        money_info: str = money_info.split("\n")
-        user_name = money_info[0]
-        money_info: int = int(money_info[2].replace(",", "").replace("원", ""))
-        hook_slack(f"로그인 사용자: {user_name}, 예치금: {money_info}")
+        is_sale_available, sale_status, sale_message = get_sale_status()
+        if not is_sale_available:
+            hook_slack(config, sale_message or "현재 구매 불가 시간대입니다.")
+            return
 
-        # 예치금 잔액 부족 미리 exception
-        if 1000 * int(COUNT) > money_info:
+        session = build_session_from_context(context)
+        balance, user_mndp = fetch_user_balance(session)
+        user_name = (
+            user_mndp.get("userNm")
+            or user_mndp.get("userId")
+            or user_mndp.get("loginId")
+            or config.user_id
+        )
+        hook_slack(config, f"로그인 사용자: {user_name}, 예치금: {balance}")
+
+        if 1000 * config.count > balance:
             raise BalanceError()
 
-        # ================================================================ #
-        # 구매하기
-        # ================================================================ #
+        page.goto(GAME_URL)
+        page.wait_for_selector("iframe#ifrm_tab")
+        game_frame = page.frame(name="ifrm_tab")
+        if not game_frame:
+            raise RuntimeError("게임 프레임을 찾지 못했습니다.")
+        target = game_frame
+        wait_for_overlay_hidden(target, "#popupLayer", timeout_ms=config.queue_timeout_ms)
 
-        page.goto(url="https://ol.dhlottery.co.kr/olotto/game/game645.do")
-        # "비정상적인 방법으로 접속하였습니다. 정상적인 PC 환경에서 접속하여 주시기 바랍니다." 우회하기
-        page.locator("#popupLayerAlert").get_by_role("button", name="확인").click()
-        page.click("text=자동번호발급")
+        unavailable_messages = [
+            "회차정보가 존재하지 않습니다",
+            "회차 정보가 존재하지 않습니다",
+            "판매시간이 아닙니다",
+            "판매 시간이 아닙니다",
+            "구매가능시간이 아닙니다",
+            "구매 가능 시간이 아닙니다",
+        ]
 
-        # 구매할 개수를 선택
-        page.select_option("select", str(COUNT))  # Select 1
-        page.click("text=확인")
-        page.click('input:has-text("구매하기")')  # Click input:has-text("구매하기")
-        time.sleep(2)
-        page.click(
-            'text=확인 취소 >> input[type="button"]'
-        )  # Click text=확인 취소 >> input[type="button"]
-        page.click('input[name="closeLayer"]')
-        # assert page.url == "https://el.dhlottery.co.kr/game/TotalGame.jsp?LottoId=LO40"
+        def check_unavailable_message(text: str) -> bool:
+            return any(msg in text for msg in unavailable_messages)
+
+        alert_layer = target.locator("#popupLayerAlert")
+        alert_message = ""
+        try:
+            if alert_layer.is_visible():
+                alert_message = read_layer_message(alert_layer)
+                LOG.debug("알림 팝업 메시지: %s", alert_message)
+                safe_click(alert_layer, "input[value='확인']")
+        except Exception:
+            pass
+
+        if check_unavailable_message(alert_message):
+            raise PurchaseUnavailableError("현재 구매 불가 시간대입니다. (팝업 확인)")
+
+        try:
+            frame_content = target.locator("body").inner_text(timeout=3000)
+            if check_unavailable_message(frame_content):
+                raise PurchaseUnavailableError("현재 구매 불가 시간대입니다. (본문 확인)")
+        except PurchaseUnavailableError:
+            raise
+        except Exception as exc:
+            LOG.debug("본문 텍스트 읽기 실패: %s", exc)
+
+        try:
+            buy_area = target.locator("#num2, #amoundApply, #btnSelectNum")
+            if buy_area.count() == 0:
+                LOG.debug("구매 영역을 찾을 수 없음")
+                raise PurchaseUnavailableError("구매 영역을 찾을 수 없습니다. 구매 가능 시간을 확인해주세요.")
+        except PurchaseUnavailableError:
+            raise
+        except Exception:
+            pass
+
+        recommend_popup = target.locator("#recommend720Plus")
+        if recommend_popup.count() > 0 and recommend_popup.is_visible():
+            raise WeeklyLimitExceededError()
+
+        auto_tab = target.locator("#num2")
+        try:
+            auto_tab.wait_for(state="visible", timeout=min(config.timeout_ms, 10000))
+        except Exception:
+            try:
+                current_content = target.locator("body").inner_text(timeout=3000)
+                if check_unavailable_message(current_content):
+                    raise PurchaseUnavailableError("현재 구매 불가 시간대입니다.")
+            except PurchaseUnavailableError:
+                raise
+            except Exception:
+                pass
+            raise PurchaseUnavailableError("구매 페이지를 불러올 수 없습니다. 구매 가능 시간을 확인해주세요.")
+        auto_tab.click()
+        time.sleep(0.5)
+
+        select_locator = target.locator("#amoundApply")
+        select_locator.wait_for(state="visible", timeout=config.timeout_ms)
+        select_locator.select_option(str(config.count))
+        time.sleep(0.3)
+
+        confirm_btn = target.locator("#btnSelectNum")
+        confirm_btn.wait_for(state="visible", timeout=config.timeout_ms)
+        confirm_btn.click()
+        time.sleep(0.5)
+
+        select_gbn_a = target.locator("#selectGbnA")
+        try:
+            select_gbn_a.wait_for(state="visible", timeout=5000)
+            if select_gbn_a.inner_text() == "미지정":
+                raise RuntimeError("번호 선택이 적용되지 않았습니다.")
+        except Exception:
+            pass
+
+        buy_btn = target.locator("button#btnBuy")
+        buy_btn.wait_for(state="visible", timeout=config.timeout_ms)
+        buy_btn.click()
+
+        dialog = wait_for_dialog(target, timeout_ms=10000)
+        if dialog and dialog[0] == "confirm":
+            followup = wait_for_dialog(target, timeout_ms=5000)
+            if followup and followup[0] == "alert":
+                raise RuntimeError(followup[1] or "구매 과정에서 오류가 발생했습니다.")
+        elif dialog and dialog[0] == "alert":
+            raise RuntimeError(dialog[1] or "구매 과정에서 오류가 발생했습니다.")
+
+        safe_click(target, "input[name='closeLayer']")
 
         hook_slack(
-            f"{COUNT}개 복권 구매 성공! \n자세하게 확인하기: https://dhlottery.co.kr/myPage.do?method=notScratchListView"
+            config,
+            (
+                f"{config.count}개 복권 구매 성공! "
+                f"\n자세하게 확인하기: {BASE_URL}/mypage/mylotteryledger"
+            ),
         )
 
-        # ================================================================ #
-        # 오늘 구매한 복권 번호 확인하기
-        # ================================================================ #
-        cookies = page.context.cookies()
-        session = Session()
-        for cookie in cookies:
-            session.cookies.set(
-                cookie["name"], cookie["value"], domain=cookie["domain"]
-            )
-
-        url = "https://dhlottery.co.kr/myPage.do"
-        querystring = {"method": "lottoBuyList"}
         now_date = get_now().date().strftime("%Y%m%d")
-        payload = f"searchStartDate={now_date}&searchEndDate={now_date}&winGrade=2"
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "ko,en;q=0.9,ko-KR;q=0.8,en-US;q=0.7",
-            "Cache-Control": "max-age=0",
-            "Connection": "keep-alive",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://dhlottery.co.kr",
-            "Referer": "https://dhlottery.co.kr/myPage.do?method=lottoBuyListView",
-            "Sec-Fetch-Dest": "iframe",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "sec-ch-ua-mobile": "?0",
-        }
-        res = session.post(url, data=payload, headers=headers, params=querystring)
-        html = BeautifulSoup(res.content, "lxml")
-        a_tag_href = html.select_one(
-            "tbody > tr:nth-child(1) > td:nth-child(4) > a"
-        ).get("href")
-        detail_info = re.findall(r"\d+", a_tag_href)
-        page.goto(
-            url=f"https://dhlottery.co.kr/myPage.do?method=lotto645Detail&orderNo={detail_info[0]}&barcode={detail_info[1]}&issueNo={detail_info[2]}"
+        numbers, info = fetch_today_purchase_numbers(
+            session,
+            now_date,
+            debug_dir=config.debug_dir if config.debug_artifacts else None,
         )
-        result_msg = ""
-        for result in page.query_selector_all("div.selected li"):
-            result_msg += ", ".join(result.inner_text().split("\n")) + "\n"
-        hook_slack(f"이번주 나의 행운의 번호는?!\n{result_msg}")
+        if numbers:
+            lines = [", ".join(group) for group in numbers]
+            hook_slack(config, "이번주 나의 행운의 번호는?!\n" + "\n".join(lines))
+        elif info.get("status") == "drawing":
+            hook_slack(config, info.get("message", "추첨 중입니다. 마이페이지에서 확인해주세요."))
+        else:
+            LOG.info("번호 조회 실패: %s", info)
+            hook_slack(config, "구매 번호를 확인하지 못했습니다. 마이페이지에서 확인해주세요.")
     except BalanceError:
-        hook_slack_btn()
+        hook_slack_btn(config)
+    except PurchaseUnavailableError as exc:
+        hook_slack(config, str(exc))
+    except WeeklyLimitExceededError as exc:
+        hook_slack(config, str(exc))
     except Exception as exc:
-        hook_slack(exc)
+        if config.debug_artifacts and page:
+            capture_screenshot(page, config.debug_dir, "buy_lotto_error")
+            save_page_html(page, config.debug_dir, "buy_lotto_error")
+        hook_slack(config, f"에러 발생: {exc}")
+        raise
     finally:
-        # End of Selenium
-        context.close()
-        browser.close()
+        if context is not None:
+            context.close()
+        if browser is not None:
+            browser.close()
 
 
-with sync_playwright() as playwright:
-    run(playwright)
+if __name__ == "__main__":
+    config = load_config()
+    setup_logging(config.debug)
+    with sync_playwright() as playwright:
+        run(playwright, config)

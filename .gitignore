@@ -1,6 +1,7 @@
 
 #################### CUSTOM ####################
 test.py
+artifacts/
 
 #################### AUTO MAKEING ####################
 # Byte-compiled / optimized / DLL files
