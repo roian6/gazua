@@ -253,11 +253,13 @@ def run(playwright: Playwright, config: Config) -> None:
         browser = playwright.chromium.launch(
             headless=config.headless,
             slow_mo=config.slow_mo if config.slow_mo > 0 else None,
-            channel="chrome",
         )
-        # 모바일 리다이렉트 방지를 위해 User-Agent 고정
+        # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            is_mobile=False,
+            has_touch=False,
         )
         page = context.new_page()
         page.set_default_timeout(config.timeout_ms)
