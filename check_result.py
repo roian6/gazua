@@ -152,13 +152,22 @@ def run(playwright: Playwright, config: Config) -> None:
             headless=config.headless,
             slow_mo=config.slow_mo if config.slow_mo > 0 else None,
         )
-        # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화
+        # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화 + Stealth
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             is_mobile=False,
             has_touch=False,
+            device_scale_factor=1.0,
         )
+        
+        # WebDriver 감지 우회 스크립트 주입
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+        
         page = context.new_page()
         page.set_default_timeout(config.timeout_ms)
         page.set_default_navigation_timeout(config.timeout_ms)
