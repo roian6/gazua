@@ -13,10 +13,22 @@ def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     page.wait_for_selector("#inpUserId", timeout=timeout_ms)
     page.fill("#inpUserId", user_id)
     page.fill("#inpUserPswdEncn", user_pw)
-    with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
-        page.click("#btnLogin")
-    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-    if "/login" in page.url:
+    
+    # 로그인 버튼 클릭 (네비게이션 대기 제거)
+    page.click("#btnLogin")
+    
+    try:
+        # 메인 페이지 URL 패턴 대기 (타임아웃 90초)
+        page.wait_for_url("**/*.do?method=main*", timeout=timeout_ms, wait_until="domcontentloaded")
+    except PlaywrightTimeoutError:
+        # 타임아웃 발생 시 현재 URL과 상태 확인
+        if "/login" in page.url:
+            raise RuntimeError(f"로그인 시간 초과. 현재 URL: {page.url}")
+        # URL은 변했지만 로딩이 안 끝난 경우일 수 있으므로 진행
+        pass
+        
+    # 추가 로딩 대기 (필요시)
+    # page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
         raise RuntimeError("로그인에 실패했거나 추가 인증이 필요합니다.")
 
 
