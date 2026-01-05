@@ -305,6 +305,8 @@ def run(playwright: Playwright, config: Config) -> None:
         for attempt in range(3):
             try:
                 LOG.info(f"게임 페이지 이동 시도 {attempt + 1}/3")
+                # Referer 헤더 추가하여 메인에서 진입한 것처럼 위장
+                page.set_extra_http_headers({"Referer": "https://dhlottery.co.kr/common.do?method=main"})
                 page.goto(GAME_URL, wait_until="domcontentloaded")
                 page.wait_for_load_state("load", timeout=config.timeout_ms)
                 
