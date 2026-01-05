@@ -10,12 +10,24 @@ from lotto_utils import LOGIN_URL
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     # 프록시 환경 고려하여 domcontentloaded로 완화
     page.goto(LOGIN_URL, wait_until="domcontentloaded")
-    page.wait_for_selector("#inpUserId", timeout=timeout_ms)
+    page.wait_for_selector("#inpUserId", state="visible", timeout=timeout_ms)
+    
+    # 입력 필드 포커스 및 입력
+    page.click("#inpUserId")
     page.fill("#inpUserId", user_id)
+    
+    page.click("#inpUserPswdEncn")
     page.fill("#inpUserPswdEncn", user_pw)
     
-    # 로그인 버튼 클릭 (네비게이션 대기 제거)
-    page.click("#btnLogin")
+    # 로그인 버튼 클릭 또는 엔터키 입력
+    # 버튼 클릭이 안 먹힐 수 있으므로 엔터키도 시도
+    page.press("#inpUserPswdEncn", "Enter")
+    
+    # 혹시 엔터키로 안 되면 버튼 클릭도 시도 (안전장치)
+    try:
+        page.click("#btnLogin", timeout=3000)
+    except Exception:
+        pass # 이미 넘어갔거나 버튼이 없으면 패스
     
     try:
         # 메인 페이지 URL 패턴 대기 (타임아웃 90초)
