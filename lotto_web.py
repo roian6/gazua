@@ -30,18 +30,15 @@ def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
         pass # 이미 넘어갔거나 버튼이 없으면 패스
     
     try:
-        # 메인 페이지 URL 패턴 대기 (타임아웃 90초)
-        page.wait_for_url("**/*.do?method=main*", timeout=timeout_ms, wait_until="domcontentloaded")
+        # 메인 페이지 URL 패턴 대기 (새로운 URL 구조: /main)
+        page.wait_for_url("**/main*", timeout=timeout_ms, wait_until="domcontentloaded")
     except PlaywrightTimeoutError:
         # 타임아웃 발생 시 현재 URL과 상태 확인
         if "/login" in page.url:
             raise RuntimeError(f"로그인 시간 초과. 현재 URL: {page.url}")
         # URL은 변했지만 로딩이 안 끝난 경우일 수 있으므로 진행
-        pass
-        
-    # 추가 로딩 대기 (필요시)
-    # page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-        raise RuntimeError("로그인에 실패했거나 추가 인증이 필요합니다.")
+        if "/main" not in page.url:
+            raise RuntimeError("로그인에 실패했거나 추가 인증이 필요합니다.")
 
 
 def capture_screenshot(page, debug_dir: str, name_prefix: str) -> Optional[str]:
