@@ -1,0 +1,29 @@
+name: Test Proxy Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-proxy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+
+      - name: Run Proxy Test
+        env:
+          PROXY_ADDRESS: ${{ secrets.PROXY_ADDRESS }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PW: ${{ secrets.PROXY_PW }}
+        run: |
+          python test_proxy.py
