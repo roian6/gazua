@@ -34,4 +34,5 @@ jobs:
             --proxy-user "${{ secrets.PROXY_USER }}" \
             --proxy-pw "${{ secrets.PROXY_PW }}" \
             --proxy-address "${{ secrets.PROXY_ADDRESS }}" \
-            --headless
+            --headless \
+            --timeout-ms 90000

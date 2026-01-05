@@ -37,7 +37,8 @@ jobs:
             --proxy-address "${{ secrets.PROXY_ADDRESS }}" \
             --headless \
             --debug \
-            --debug-artifacts
+            --debug-artifacts \
+            --timeout-ms 90000
 
       - name: Upload debug artifacts
         if: failure()
