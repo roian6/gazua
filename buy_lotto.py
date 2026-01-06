@@ -90,9 +90,49 @@ UNAVAILABLE_MESSAGES = [
     "구매 가능 시간이 아닙니다",
 ]
 
+SESSION_EXPIRED_MESSAGES = [
+    "세션이 해제되었습니다",
+    "세션이 만료되었습니다",
+    "로그인해 주시기 바랍니다",
+    "로그인이 필요합니다",
+    "시간 초과",
+]
+
 
 def check_unavailable_message(text: str) -> bool:
     return any(msg in text for msg in UNAVAILABLE_MESSAGES)
+
+
+def check_session_expired(text: str) -> bool:
+    return any(msg in text for msg in SESSION_EXPIRED_MESSAGES)
+
+
+def extract_site_message(target) -> str:
+    messages = []
+    
+    for selector in ["#popupLayerAlert", "#popupLayerConfirm", ".layer-message", ".popup-message"]:
+        try:
+            el = target.locator(selector)
+            if el.count() > 0 and el.is_visible():
+                text = el.inner_text(timeout=2000).strip()
+                if text:
+                    messages.append(text)
+        except Exception:
+            pass
+    
+    if not messages:
+        try:
+            body_text = target.locator("body").inner_text(timeout=3000)
+            for line in body_text.split("\n"):
+                line = line.strip()
+                if any(keyword in line for keyword in ["세션", "로그인", "시간", "판매", "구매", "오류", "실패"]):
+                    messages.append(line)
+                    if len(messages) >= 3:
+                        break
+        except Exception:
+            pass
+    
+    return " | ".join(messages[:3]) if messages else ""
 
 
 def run(playwright: Playwright, config: Config) -> None:
@@ -180,13 +220,20 @@ def run(playwright: Playwright, config: Config) -> None:
             pass
 
         if check_unavailable_message(alert_message):
-            raise PurchaseUnavailableError("현재 구매 불가 시간대입니다. (팝업 확인)")
+            raise PurchaseUnavailableError(f"현재 구매 불가 시간대입니다. 사이트 메시지: {alert_message}")
+        
+        if check_session_expired(alert_message):
+            raise RuntimeError(f"세션이 만료되었습니다. 다시 로그인해주세요. 사이트 메시지: {alert_message}")
 
         try:
             frame_content = target.locator("body").inner_text(timeout=3000)
+            if check_session_expired(frame_content):
+                site_msg = extract_site_message(target)
+                raise RuntimeError(f"세션이 만료되었습니다. 다시 로그인해주세요. 사이트 메시지: {site_msg}")
             if check_unavailable_message(frame_content):
-                raise PurchaseUnavailableError("현재 구매 불가 시간대입니다. (본문 확인)")
-        except PurchaseUnavailableError:
+                site_msg = extract_site_message(target)
+                raise PurchaseUnavailableError(f"현재 구매 불가 시간대입니다. 사이트 메시지: {site_msg}")
+        except (PurchaseUnavailableError, RuntimeError):
             raise
         except Exception as exc:
             LOG.debug("본문 텍스트 읽기 실패: %s", exc)
@@ -194,9 +241,11 @@ def run(playwright: Playwright, config: Config) -> None:
         try:
             buy_area = target.locator("#num2, #amoundApply, #btnSelectNum")
             if buy_area.count() == 0:
-                LOG.debug("구매 영역을 찾을 수 없음")
-                raise PurchaseUnavailableError("구매 영역을 찾을 수 없습니다. 구매 가능 시간을 확인해주세요.")
-        except PurchaseUnavailableError:
+                site_msg = extract_site_message(target)
+                if check_session_expired(site_msg):
+                    raise RuntimeError(f"세션이 만료되었습니다. 다시 로그인해주세요. 사이트 메시지: {site_msg}")
+                raise PurchaseUnavailableError(f"구매 영역을 찾을 수 없습니다. 사이트 메시지: {site_msg or '없음'}")
+        except (PurchaseUnavailableError, RuntimeError):
             raise
         except Exception:
             pass
@@ -209,15 +258,12 @@ def run(playwright: Playwright, config: Config) -> None:
         try:
             auto_tab.wait_for(state="visible", timeout=min(config.timeout_ms, 10000))
         except Exception:
-            try:
-                current_content = target.locator("body").inner_text(timeout=3000)
-                if check_unavailable_message(current_content):
-                    raise PurchaseUnavailableError("현재 구매 불가 시간대입니다.")
-            except PurchaseUnavailableError:
-                raise
-            except Exception:
-                pass
-            raise PurchaseUnavailableError("구매 페이지를 불러올 수 없습니다. 구매 가능 시간을 확인해주세요.")
+            site_msg = extract_site_message(target)
+            if check_session_expired(site_msg):
+                raise RuntimeError(f"세션이 만료되었습니다. 다시 로그인해주세요. 사이트 메시지: {site_msg}")
+            if check_unavailable_message(site_msg):
+                raise PurchaseUnavailableError(f"현재 구매 불가 시간대입니다. 사이트 메시지: {site_msg}")
+            raise PurchaseUnavailableError(f"구매 페이지를 불러올 수 없습니다. 사이트 메시지: {site_msg or '없음'}")
         auto_tab.click()
         time.sleep(0.5)
 
