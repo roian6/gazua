@@ -8,35 +8,28 @@ from config import LOGIN_URL
 
 
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
-    # 프록시 환경 고려하여 domcontentloaded로 완화
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
     page.wait_for_selector("#inpUserId", state="visible", timeout=timeout_ms)
     
-    # 입력 필드 포커스 및 입력
-    page.click("#inpUserId")
-    page.fill("#inpUserId", user_id)
+    # type()을 사용해야 onkeyup 이벤트 발생 -> enterUserLogin() -> RSA 암호화
+    id_input = page.locator("#inpUserId")
+    id_input.click()
+    id_input.fill("")
+    id_input.type(user_id, delay=50)
     
-    page.click("#inpUserPswdEncn")
-    page.fill("#inpUserPswdEncn", user_pw)
+    pw_input = page.locator("#inpUserPswdEncn")
+    pw_input.click()
+    pw_input.fill("")
+    pw_input.type(user_pw, delay=50)
     
-    # 로그인 버튼 클릭 또는 엔터키 입력
-    # 버튼 클릭이 안 먹힐 수 있으므로 엔터키도 시도
-    page.press("#inpUserPswdEncn", "Enter")
-    
-    # 혹시 엔터키로 안 되면 버튼 클릭도 시도 (안전장치)
-    try:
-        page.click("#btnLogin", timeout=3000)
-    except Exception:
-        pass # 이미 넘어갔거나 버튼이 없으면 패스
+    page.wait_for_timeout(500)
+    page.locator("#btnLogin").click()
     
     try:
-        # 메인 페이지 URL 패턴 대기 (새로운 URL 구조: /main)
         page.wait_for_url("**/main*", timeout=timeout_ms, wait_until="domcontentloaded")
     except PlaywrightTimeoutError:
-        # 타임아웃 발생 시 현재 URL과 상태 확인
         if "/login" in page.url:
             raise RuntimeError(f"로그인 시간 초과. 현재 URL: {page.url}")
-        # URL은 변했지만 로딩이 안 끝난 경우일 수 있으므로 진행
         if "/main" not in page.url:
             raise RuntimeError("로그인에 실패했거나 추가 인증이 필요합니다.")
 
