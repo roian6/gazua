@@ -27,16 +27,18 @@ DEBUG_DIR=artifacts
 ```
 
 ## Usage
-```
+```bash
 python3 buy_lotto.py
 python3 check_result.py
 ```
 
-Positional 인자도 지원합니다.
+### CLI 옵션
+```bash
+python3 buy_lotto.py --count 5 --debug --headless
+python3 check_result.py --debug
 ```
-python3 buy_lotto.py <id> <pw> <slack_token> <slack_channel> <count>
-python3 check_result.py <id> <pw> <slack_token> <slack_channel>
-```
+
+> ⚠️ 보안상 ID/PW는 환경변수로만 설정하세요. CLI 인자로 전달하면 프로세스 목록에 노출됩니다.
 
 ## Debug artifacts
 `DEBUG_ARTIFACTS=true`로 설정하면 오류 시 스크린샷/HTML이 `artifacts/`에 저장됩니다.

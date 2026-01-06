@@ -4,7 +4,7 @@ from typing import Optional
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from lotto_utils import LOGIN_URL
+from config import LOGIN_URL
 
 
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:

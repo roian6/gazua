@@ -2,39 +2,15 @@ import json
 import logging
 import os
 import re
-import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
-import requests
-from requests import Response, Session
+from requests import Session
 
-BASE_URL = "https://dhlottery.co.kr"
-LOGIN_URL = f"{BASE_URL}/login"
-MAIN_INFO_URL = f"{BASE_URL}/selectMainInfo.do"
-USER_MNDP_URL = f"{BASE_URL}/mypage/selectUserMndp.do"
+from config import BASE_URL, MAIN_INFO_URL, USER_AGENT, USER_MNDP_URL
 
 LOG = logging.getLogger(__name__)
-
-
-def load_env_file(path: str = ".env") -> None:
-    if not os.path.isfile(path):
-        return
-    with open(path, "r", encoding="utf-8") as env_file:
-        for raw_line in env_file:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[len("export ") :]
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip("'").strip('"')
-            if key and key not in os.environ:
-                os.environ[key] = value
 
 
 def get_now() -> datetime:
@@ -87,51 +63,15 @@ def build_session_from_context(context) -> Session:
     session = Session()
     for cookie in context.cookies():
         session.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"])
+
+    session.headers.update({
+        "User-Agent": USER_AGENT,
+        "Referer": BASE_URL,
+        "Origin": BASE_URL,
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+    })
     return session
-
-
-def post_to_slack(
-    payload: Dict[str, Any],
-    token: str,
-    max_retries: int = 3,
-    timeout: int = 10,
-    logger: Optional[logging.Logger] = None,
-) -> Optional[Response]:
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}",
-    }
-    backoff = 1
-    last_response = None
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                "https://slack.com/api/chat.postMessage",
-                json=payload,
-                headers=headers,
-                timeout=timeout,
-            )
-            last_response = response
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                sleep_for = int(retry_after) if retry_after and retry_after.isdigit() else backoff
-                time.sleep(sleep_for)
-                backoff *= 2
-                continue
-            if response.status_code >= 500:
-                time.sleep(backoff)
-                backoff *= 2
-                continue
-            return response
-        except requests.RequestException as exc:
-            if logger:
-                logger.warning("Slack request failed: %s", exc)
-            if attempt < max_retries - 1:
-                time.sleep(backoff)
-                backoff *= 2
-                continue
-            return last_response
-    return last_response
 
 
 def fetch_user_balance(session: Session) -> Tuple[int, Dict[str, Any]]:

@@ -1,221 +1,44 @@
-import argparse
 import logging
-import os
-import sys
 import time
-from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from playwright.sync_api import Playwright, sync_playwright
 
-from lotto_utils import (
+from browser import create_browser_context, create_page
+from config import (
     BASE_URL,
+    GAME_URL,
+    Config,
+    create_buy_parser,
+    load_config,
+    setup_logging,
+)
+from lotto_utils import (
     build_session_from_context,
     fetch_today_purchase_numbers,
     fetch_user_balance,
     get_now,
     get_sale_status,
-    load_env_file,
-    post_to_slack,
 )
 from lotto_web import capture_screenshot, login, save_page_html, wait_for_overlay_hidden
-
-GAME_URL = "https://el.dhlottery.co.kr/game/TotalGame.jsp?LottoId=LO40"
+from slack_notify import notify, notify_low_balance
 
 LOG = logging.getLogger(__name__)
 
 
 class BalanceError(Exception):
-    def __init__(self, message="예치금이 부족합니다."):
+    def __init__(self, message: str = "예치금이 부족합니다."):
         super().__init__(message)
 
 
 class PurchaseUnavailableError(Exception):
-    def __init__(self, message="현재 구매 불가 시간대입니다."):
+    def __init__(self, message: str = "현재 구매 불가 시간대입니다."):
         super().__init__(message)
 
 
 class WeeklyLimitExceededError(Exception):
-    def __init__(self, message="주간 구매 한도가 소진되었습니다."):
+    def __init__(self, message: str = "주간 구매 한도가 소진되었습니다."):
         super().__init__(message)
-
-
-@dataclass
-class Config:
-    user_id: str
-    user_pw: str
-    slack_token: str
-    slack_channel: str
-    count: int
-    headless: bool
-    debug: bool
-    debug_artifacts: bool
-    debug_dir: str
-    timeout_ms: int
-    queue_timeout_ms: int
-    slow_mo: int
-    proxy_user: Optional[str] = None
-    proxy_pw: Optional[str] = None
-    proxy_address: Optional[str] = None
-
-
-def parse_bool(value: Optional[str], default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="동행복권 로또 자동 구매")
-    parser.add_argument("user_id", nargs="?")
-    parser.add_argument("user_pw", nargs="?")
-    parser.add_argument("slack_token", nargs="?")
-    parser.add_argument("slack_channel", nargs="?")
-    parser.add_argument("count", nargs="?")
-    parser.add_argument("--user-id", dest="user_id_opt")
-    parser.add_argument("--user-pw", dest="user_pw_opt")
-    parser.add_argument("--slack-token", dest="slack_token_opt")
-    parser.add_argument("--slack-channel", dest="slack_channel_opt")
-    parser.add_argument("--count", dest="count_opt", type=int)
-    parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--headed", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--debug-artifacts", action="store_true")
-    parser.add_argument("--debug-dir", default=None)
-    parser.add_argument("--timeout-ms", type=int, default=30000)
-    parser.add_argument("--queue-timeout-ms", type=int, default=180000)
-    parser.add_argument("--slow-mo", type=int, default=0)
-    parser.add_argument("--proxy-user", dest="proxy_user")
-    parser.add_argument("--proxy-pw", dest="proxy_pw")
-    parser.add_argument("--proxy-address", dest="proxy_address")
-    return parser.parse_args()
-
-
-def load_config() -> Config:
-    load_env_file()
-    args = parse_args()
-
-    user_id = args.user_id_opt or args.user_id or os.getenv("DHL_USER_ID")
-    user_pw = args.user_pw_opt or args.user_pw or os.getenv("DHL_USER_PW")
-    slack_token = (
-        args.slack_token_opt or args.slack_token or os.getenv("SLACK_BOT_TOKEN")
-    )
-    slack_channel = (
-        args.slack_channel_opt or args.slack_channel or os.getenv("SLACK_CHANNEL")
-    )
-
-    count_raw = (
-        args.count_opt
-        if args.count_opt is not None
-        else args.count or os.getenv("LOTTO_COUNT")
-    )
-    count = int(count_raw) if count_raw is not None else 1
-
-    headless_env = parse_bool(os.getenv("HEADLESS"), default=True)
-    if args.headed:
-        headless = False
-    elif args.headless:
-        headless = True
-    else:
-        headless = headless_env
-
-    debug = args.debug or parse_bool(os.getenv("DEBUG"))
-    debug_artifacts = args.debug_artifacts or parse_bool(os.getenv("DEBUG_ARTIFACTS"))
-    debug_dir = args.debug_dir or os.getenv("DEBUG_DIR") or "artifacts"
-
-    missing = []
-    if not user_id:
-        missing.append("DHL_USER_ID")
-    if not user_pw:
-        missing.append("DHL_USER_PW")
-    if not slack_token:
-        missing.append("SLACK_BOT_TOKEN")
-    if not slack_channel:
-        missing.append("SLACK_CHANNEL")
-    if missing:
-        raise SystemExit(f"Missing required settings: {', '.join(missing)}")
-
-    if count <= 0:
-        raise SystemExit("COUNT must be a positive integer.")
-    
-    proxy_user = args.proxy_user or os.getenv("PROXY_USER")
-    proxy_pw = args.proxy_pw or os.getenv("PROXY_PW")
-    proxy_address = args.proxy_address or os.getenv("PROXY_ADDRESS")
-
-    return Config(
-        user_id=user_id,
-        user_pw=user_pw,
-        slack_token=slack_token,
-        slack_channel=slack_channel,
-        count=count,
-        headless=headless,
-        debug=debug,
-        debug_artifacts=debug_artifacts,
-        debug_dir=debug_dir,
-        timeout_ms=args.timeout_ms,
-        queue_timeout_ms=args.queue_timeout_ms,
-        slow_mo=args.slow_mo,
-        proxy_user=proxy_user,
-        proxy_pw=proxy_pw,
-        proxy_address=proxy_address,
-    )
-
-
-def setup_logging(debug: bool) -> None:
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
-
-
-def hook_slack(config: Config, message: str) -> None:
-    korea_time_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
-    payload = {
-        "text": f"> {korea_time_str} *로또 자동 구매 봇 알림* \n{message}",
-        "channel": config.slack_channel,
-    }
-    response = post_to_slack(payload, config.slack_token, logger=LOG)
-    if response is None:
-        return
-    try:
-        data = response.json()
-        if not data.get("ok", True):
-            LOG.warning("Slack error: %s", data)
-    except ValueError:
-        return
-
-
-def hook_slack_btn(config: Config) -> None:
-    korea_time_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
-    payload = {
-        "channel": config.slack_channel,
-        "blocks": [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"> {korea_time_str} *로또 자동 구매 봇 알림* "
-                        "\n예치금이 부족합니다! 충전을 해주세요!"
-                    ),
-                },
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "충전하러 가기",
-                            "emoji": True,
-                        },
-                        "url": "https://dhlottery.co.kr/payment.do?method=payment",
-                        "action_id": "button_action",
-                    }
-                ],
-            },
-        ],
-    }
-    post_to_slack(payload, config.slack_token, logger=LOG)
 
 
 def safe_click(target, selector: str, timeout_ms: int = 2000) -> bool:
@@ -258,57 +81,35 @@ def wait_for_dialog(target, timeout_ms: int) -> Optional[Tuple[str, str]]:
     return None
 
 
+UNAVAILABLE_MESSAGES = [
+    "회차정보가 존재하지 않습니다",
+    "회차 정보가 존재하지 않습니다",
+    "판매시간이 아닙니다",
+    "판매 시간이 아닙니다",
+    "구매가능시간이 아닙니다",
+    "구매 가능 시간이 아닙니다",
+]
+
+
+def check_unavailable_message(text: str) -> bool:
+    return any(msg in text for msg in UNAVAILABLE_MESSAGES)
+
+
 def run(playwright: Playwright, config: Config) -> None:
     browser = None
     context = None
     page = None
+
     try:
-        launch_options = {
-            "headless": config.headless,
-            "slow_mo": config.slow_mo if config.slow_mo > 0 else None,
-        }
-        if config.proxy_address:
-            launch_options["proxy"] = {
-                "server": f"http://{config.proxy_address}",
-            }
-            if config.proxy_user and config.proxy_pw:
-                launch_options["proxy"]["username"] = config.proxy_user
-                launch_options["proxy"]["password"] = config.proxy_pw
-
-        browser = playwright.chromium.launch(**launch_options)
-
-        # 모바일 리다이렉트 방지: UA 고정 + 뷰포트 설정 + 모바일/터치 비활성화 + Stealth
-        # 동행복권은 모바일/PC 구분을 엄격하게 하므로 PC 환경을 완벽하게 흉내내야 함
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-            is_mobile=False,
-            has_touch=False,
-            device_scale_factor=1.0,
-            locale="ko-KR",
-            timezone_id="Asia/Seoul",
-        )
-        
-        # WebDriver 감지 우회 스크립트 주입
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            // 모바일 속성 제거
-            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-            window.navigator.chrome = { runtime: {} };
-        """)
-        
-        page = context.new_page()
-        page.set_default_timeout(config.timeout_ms)
-        page.set_default_navigation_timeout(config.timeout_ms)
+        browser, context = create_browser_context(playwright, config)
+        page = create_page(context, config)
 
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
         LOG.info("로그인 후 현재 URL: %s", page.url)
 
         is_sale_available, sale_status, sale_message = get_sale_status()
         if not is_sale_available:
-            hook_slack(config, sale_message or "현재 구매 불가 시간대입니다.")
+            notify(config, sale_message or "현재 구매 불가 시간대입니다.")
             return
 
         session = build_session_from_context(context)
@@ -319,23 +120,20 @@ def run(playwright: Playwright, config: Config) -> None:
             or user_mndp.get("loginId")
             or config.user_id
         )
-        hook_slack(config, f"로그인 사용자: {user_name}, 예치금: {balance}")
+        notify(config, f"로그인 사용자: {user_name}, 예치금: {balance}")
 
         if 1000 * config.count > balance:
             raise BalanceError()
 
-        # 게임 페이지로 이동 (리다이렉트 대응 로직 포함)
         for attempt in range(3):
             try:
                 LOG.info(f"게임 페이지 이동 시도 {attempt + 1}/3")
-                page.set_extra_http_headers({"Referer": "https://dhlottery.co.kr/main"})
+                page.set_extra_http_headers({"Referer": f"{BASE_URL}/main"})
                 page.goto(GAME_URL, wait_until="domcontentloaded")
                 page.wait_for_load_state("load", timeout=config.timeout_ms)
-                
-                # 모바일 페이지로 리다이렉트되었는지 확인
+
                 if "m.dhlottery.co.kr" in page.url:
                     LOG.warning(f"모바일 페이지로 리다이렉트됨: {page.url}")
-                    # PC 버전 강제 쿠키 시도 (추측)
                     context.add_cookies([
                         {"name": "PC_VER", "value": "Y", "domain": ".dhlottery.co.kr", "path": "/"}
                     ])
@@ -343,47 +141,33 @@ def run(playwright: Playwright, config: Config) -> None:
                     continue
 
                 if "/login" in page.url.lower() or "login" in page.url.lower():
-                     # 리다이렉트된 페이지의 내용 확인
                     body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
                     LOG.error("페이지 내용 덤프: %s", body_text)
                     raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
-            
+
                 page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
-                # 성공하면 루프 탈출
                 break
             except Exception as exc:
-                if attempt == 2: # 마지막 시도에서도 실패하면 에러 처리
+                if attempt == 2:
                     if config.debug_artifacts:
                         capture_screenshot(page, config.debug_dir, "game_page_error")
                         save_page_html(page, config.debug_dir, "game_page_error")
-                    
+
                     try:
                         body_text = page.locator("body").inner_text()[:1000].replace("\n", " ")
-                    except:
+                    except Exception:
                         body_text = "텍스트 추출 실패"
-                        
+
                     LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
                     LOG.error("실패 시점 페이지 내용: %s", body_text)
                     raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
                 time.sleep(2)
-        
+
         game_frame = page.frame(name="ifrm_tab")
         if not game_frame:
             raise RuntimeError("게임 프레임을 찾지 못했습니다.")
         target = game_frame
         wait_for_overlay_hidden(target, "#popupLayer", timeout_ms=config.queue_timeout_ms)
-
-        unavailable_messages = [
-            "회차정보가 존재하지 않습니다",
-            "회차 정보가 존재하지 않습니다",
-            "판매시간이 아닙니다",
-            "판매 시간이 아닙니다",
-            "구매가능시간이 아닙니다",
-            "구매 가능 시간이 아닙니다",
-        ]
-
-        def check_unavailable_message(text: str) -> bool:
-            return any(msg in text for msg in unavailable_messages)
 
         alert_layer = target.locator("#popupLayerAlert")
         alert_message = ""
@@ -469,12 +253,9 @@ def run(playwright: Playwright, config: Config) -> None:
 
         safe_click(target, "input[name='closeLayer']")
 
-        hook_slack(
+        notify(
             config,
-            (
-                f"{config.count}개 복권 구매 성공! "
-                f"\n자세하게 확인하기: {BASE_URL}/mypage/mylotteryledger"
-            ),
+            f"{config.count}개 복권 구매 성공!\n자세하게 확인하기: {BASE_URL}/mypage/mylotteryledger",
         )
 
         now_date = get_now().date().strftime("%Y%m%d")
@@ -485,23 +266,24 @@ def run(playwright: Playwright, config: Config) -> None:
         )
         if numbers:
             lines = [", ".join(group) for group in numbers]
-            hook_slack(config, "이번주 나의 행운의 번호는?!\n" + "\n".join(lines))
+            notify(config, "이번주 나의 행운의 번호는?!\n" + "\n".join(lines))
         elif info.get("status") == "drawing":
-            hook_slack(config, info.get("message", "추첨 중입니다. 마이페이지에서 확인해주세요."))
+            notify(config, info.get("message", "추첨 중입니다. 마이페이지에서 확인해주세요."))
         else:
             LOG.info("번호 조회 실패: %s", info)
-            hook_slack(config, "구매 번호를 확인하지 못했습니다. 마이페이지에서 확인해주세요.")
+            notify(config, "구매 번호를 확인하지 못했습니다. 마이페이지에서 확인해주세요.")
+
     except BalanceError:
-        hook_slack_btn(config)
+        notify_low_balance(config)
     except PurchaseUnavailableError as exc:
-        hook_slack(config, str(exc))
+        notify(config, str(exc))
     except WeeklyLimitExceededError as exc:
-        hook_slack(config, str(exc))
+        notify(config, str(exc))
     except Exception as exc:
         if config.debug_artifacts and page:
             capture_screenshot(page, config.debug_dir, "buy_lotto_error")
             save_page_html(page, config.debug_dir, "buy_lotto_error")
-        hook_slack(config, f"에러 발생: {exc}")
+        notify(config, f"에러 발생: {exc}")
         raise
     finally:
         if context is not None:
@@ -511,7 +293,7 @@ def run(playwright: Playwright, config: Config) -> None:
 
 
 if __name__ == "__main__":
-    config = load_config()
-    setup_logging(config.debug)
-    with sync_playwright() as playwright:
-        run(playwright, config)
+    cfg = load_config(create_buy_parser(), require_count=True)
+    setup_logging(cfg.debug)
+    with sync_playwright() as pw:
+        run(pw, cfg)
