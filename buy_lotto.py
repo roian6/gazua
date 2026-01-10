@@ -220,6 +220,22 @@ def run(playwright: Playwright, config: Config) -> None:
         if not game_frame:
             raise RuntimeError("게임 프레임을 찾지 못했습니다.")
         target = game_frame
+        
+        # 프레임 상태 디버깅
+        LOG.info(f"게임 프레임 URL: {game_frame.url}")
+        try:
+            frame_html_preview = game_frame.locator("body").inner_html(timeout=5000)[:500]
+            LOG.debug(f"프레임 HTML 미리보기: {frame_html_preview}")
+        except Exception as e:
+            LOG.warning(f"프레임 HTML 읽기 실패: {e}")
+        
+        # 프레임 로드 대기
+        try:
+            game_frame.wait_for_load_state("domcontentloaded", timeout=30000)
+            LOG.info("프레임 domcontentloaded 완료")
+        except Exception as e:
+            LOG.warning(f"프레임 로드 대기 실패: {e}")
+        
         wait_for_overlay_hidden(target, "#popupLayer", timeout_ms=config.queue_timeout_ms)
 
         alert_layer = target.locator("#popupLayerAlert")
