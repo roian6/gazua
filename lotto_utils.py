@@ -315,3 +315,31 @@ def fetch_latest_lotto_result() -> Optional[Tuple[int, Optional[str], List[str],
     bonus = latest.get("bnsWnNo")
     draw_date = latest.get("ltRflYmd")
     return as_int(latest.get("ltEpsd")), draw_date, numbers, str(bonus) if bonus else None
+
+
+def fetch_lotto_result_by_round(
+    draw_no: int,
+) -> Optional[Tuple[int, Optional[str], List[str], Optional[str]]]:
+    url = f"https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo={draw_no}"
+    try:
+        res = Session().get(url, timeout=20)
+        res.raise_for_status()
+        data = res.json()
+        if data.get("returnValue") != "success":
+            return None
+        numbers = [
+            str(data.get("drwtNo1")),
+            str(data.get("drwtNo2")),
+            str(data.get("drwtNo3")),
+            str(data.get("drwtNo4")),
+            str(data.get("drwtNo5")),
+            str(data.get("drwtNo6")),
+        ]
+        bonus = data.get("bnusNo")
+        draw_date = data.get("drwNoDate")
+        if draw_date:
+            draw_date = draw_date.replace("-", "")
+        return draw_no, draw_date, numbers, str(bonus) if bonus else None
+    except Exception as exc:
+        LOG.warning(f"회차 {draw_no} 결과 조회 실패: {exc}")
+        return None
