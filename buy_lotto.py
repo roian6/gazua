@@ -71,10 +71,16 @@ def wait_for_dialog(target, timeout_ms: int) -> Optional[Tuple[str, str]]:
     while time.time() < end_time:
         if confirm_layer.is_visible():
             message = read_layer_message(confirm_layer)
-            safe_click(confirm_layer, "input[value='확인']")
+            LOG.debug(f"confirm 다이얼로그 발견: {message}")
+            clicked = safe_click(confirm_layer, "input[value='확인']")
+            LOG.debug(f"확인 버튼 클릭 결과: {clicked}")
+            time.sleep(0.5)
+            if confirm_layer.is_visible():
+                LOG.warning("확인 버튼 클릭 후에도 다이얼로그가 여전히 표시됨")
             return "confirm", message
         if alert_layer.is_visible():
             message = read_layer_message(alert_layer)
+            LOG.debug(f"alert 다이얼로그 발견: {message}")
             safe_click(alert_layer, "input[value='확인']")
             return "alert", message
         time.sleep(0.5)
@@ -344,12 +350,22 @@ def run(playwright: Playwright, config: Config) -> None:
         dialog = wait_for_dialog(target, timeout_ms=10000)
         LOG.info(f"다이얼로그 결과: {dialog}")
         if dialog and dialog[0] == "confirm":
-            followup = wait_for_dialog(target, timeout_ms=5000)
+            followup = wait_for_dialog(target, timeout_ms=15000)
             LOG.info(f"후속 다이얼로그: {followup}")
-            if followup and followup[0] == "alert":
-                raise RuntimeError(followup[1] or "구매 과정에서 오류가 발생했습니다.")
+            if followup is None:
+                LOG.warning("구매 확인 후 응답 다이얼로그를 받지 못함 - 구매 실패 가능성")
+                raise RuntimeError("구매 확인 후 응답을 받지 못했습니다. 마이페이지에서 확인하세요.")
+            if followup[0] == "alert":
+                alert_msg = followup[1]
+                if "성공" in alert_msg or "완료" in alert_msg or "구매" in alert_msg:
+                    LOG.info(f"구매 성공 메시지 확인: {alert_msg}")
+                else:
+                    raise RuntimeError(alert_msg or "구매 과정에서 오류가 발생했습니다.")
         elif dialog and dialog[0] == "alert":
             raise RuntimeError(dialog[1] or "구매 과정에서 오류가 발생했습니다.")
+        elif dialog is None:
+            LOG.warning("구매 버튼 클릭 후 다이얼로그가 나타나지 않음")
+            raise RuntimeError("구매 다이얼로그가 나타나지 않았습니다.")
 
         safe_click(target, "input[name='closeLayer']")
         LOG.info("구매 플로우 완료")
