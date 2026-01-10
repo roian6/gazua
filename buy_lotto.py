@@ -168,8 +168,20 @@ def run(playwright: Playwright, config: Config) -> None:
         for attempt in range(3):
             try:
                 LOG.info(f"게임 페이지 이동 시도 {attempt + 1}/3")
+                LOG.debug(f"GAME_URL: {GAME_URL}")
                 page.set_extra_http_headers({"Referer": f"{BASE_URL}/main"})
-                page.goto(GAME_URL, wait_until="domcontentloaded")
+                
+                try:
+                    response = page.goto(GAME_URL, wait_until="domcontentloaded")
+                    if response:
+                        LOG.info(f"goto 응답: status={response.status}, url={response.url}")
+                    else:
+                        LOG.warning("goto 응답이 None입니다")
+                except Exception as goto_err:
+                    LOG.error(f"goto 실패: {type(goto_err).__name__}: {goto_err}")
+                    LOG.error(f"현재 URL: {page.url}")
+                    raise
+                
                 page.wait_for_load_state("load", timeout=config.timeout_ms)
 
                 if "m.dhlottery.co.kr" in page.url:
@@ -188,6 +200,7 @@ def run(playwright: Playwright, config: Config) -> None:
                 page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
                 break
             except Exception as exc:
+                LOG.error(f"시도 {attempt + 1}/3 실패: {type(exc).__name__}: {exc}")
                 if attempt == 2:
                     if config.debug_artifacts:
                         capture_screenshot(page, config.debug_dir, "game_page_error")
