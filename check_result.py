@@ -1,6 +1,8 @@
 import logging
 import re
-from typing import List, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
 from playwright.sync_api import Playwright, sync_playwright
 
@@ -50,54 +52,17 @@ def extract_draw_number_from_lotto_item(text: str) -> Optional[int]:
     return None
 
 
-def extract_lotto_numbers_from_purchase_codes(text: str) -> List[List[str]]:
-    """Parse 5-digit purchase codes (e.g., '63035 60450') into lotto numbers.
-
-    Each 5-digit code's last 2 digits represent a lotto number (01-45).
-    A valid lotto entry has 6 unique numbers from 6+ codes.
-    """
-    all_numbers: List[List[str]] = []
-    code_pattern = r"(\d{5}(?:\s+\d{5})*)"
-    matches = re.findall(code_pattern, text)
-
-    for match in matches:
-        codes = match.split()
-        if len(codes) < 5:
-            continue
-
-        numbers = []
-        for code in codes:
-            if len(code) == 5:
-                num = int(code[-2:])
-                if 1 <= num <= 45:
-                    numbers.append(str(num).zfill(2))
-
-        if len(numbers) >= 6:
-            seen = set()
-            unique_nums = []
-            for n in numbers:
-                if n not in seen:
-                    seen.add(n)
-                    unique_nums.append(n)
-                    if len(unique_nums) == 6:
-                        break
-            if len(unique_nums) == 6:
-                all_numbers.append(unique_nums)
-
-    return all_numbers
-
-
-def _click_search_with_monthly_range(page, timeout_ms: int) -> None:
+def _click_search_with_monthly_range(page) -> None:
     try:
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.wait_for_selector("#btnSrch", timeout=10000)
 
-        month_button = page.locator("button:has-text('최근 1개월')")
+        month_button = page.locator("button.btChgDt:has-text('최근 1개월')")
         if month_button.count() > 0:
             month_button.click()
             LOG.info("최근 1개월 버튼 클릭")
             page.wait_for_timeout(500)
 
-            search_button = page.locator("button:has-text('검색')").first
+            search_button = page.locator("#btnSrch")
             search_button.click()
             LOG.info("검색 버튼 클릭")
             page.wait_for_timeout(2000)
@@ -105,24 +70,114 @@ def _click_search_with_monthly_range(page, timeout_ms: int) -> None:
         LOG.warning(f"조회 기간 설정 실패, 기본값으로 진행: {e}")
 
 
+def _get_recent_date_range(days: int = 31) -> Tuple[str, str]:
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    return start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
+
+
+def _fetch_ledger_list(page, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    url = (
+        "https://www.dhlottery.co.kr/mypage/selectMyLotteryledger.do"
+        f"?srchStrDt={start_date}&srchEndDt={end_date}"
+        "&sort=&ltGdsCd=&winResult=&pageNum=1&recordCountPerPage=10"
+    )
+    try:
+        response = page.evaluate(
+            """
+            async (url) => {
+              const res = await fetch(url, { credentials: 'include' });
+              return res.json();
+            }
+            """,
+            url,
+        )
+        if not response or not response.get("data"):
+            return []
+        return response["data"].get("list", []) or []
+    except Exception as e:
+        LOG.warning(f"구매 내역 API 요청 실패: {e}")
+        return []
+
+
+def _fetch_ticket_detail(page, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    query = urlencode({k: v for k, v in params.items() if v is not None})
+    url = f"https://www.dhlottery.co.kr/mypage/lotto645TicketDetail.do?{query}"
+    try:
+        response = page.evaluate(
+            """
+            async (url) => {
+              const res = await fetch(url, { credentials: 'include' });
+              return res.json();
+            }
+            """,
+            url,
+        )
+        return response.get("data") if response else None
+    except Exception as e:
+        LOG.warning(f"상세 내역 API 요청 실패: {e}")
+        return None
+
+
+def _parse_purchases_from_api(page) -> List[Tuple[int, List[List[str]]]]:
+    start_date, end_date = _get_recent_date_range()
+    items = _fetch_ledger_list(page, start_date, end_date)
+    purchases: List[Tuple[int, List[List[str]]]] = []
+
+    for item in items:
+        if item.get("ltGdsCd") != "LO40":
+            continue
+        draw_no = item.get("ltEpsd") or item.get("ltEpsdView")
+        gm_info = item.get("gmInfo")
+        if not draw_no or not gm_info:
+            continue
+
+        params = {
+            "ntslOrdrNo": item.get("ntslOrdrNo"),
+            "srchStrDt": start_date,
+            "srchEndDt": end_date,
+            "barcd": gm_info,
+        }
+        detail = _fetch_ticket_detail(page, params)
+        if detail and detail.get("ticket"):
+            games = detail["ticket"].get("game_dtl") or []
+            if games:
+                numbers = [
+                    [str(n).zfill(2) for n in game.get("num", [])]
+                    for game in games
+                    if game.get("num")
+                ]
+                numbers = [nums for nums in numbers if len(nums) == 6]
+                if numbers:
+                    purchases.append((int(draw_no), numbers))
+                    continue
+
+
+    LOG.info(f"API에서 추출한 구매 건수: {len(purchases)}")
+    return purchases
+
+
 def _parse_purchases_from_list(page) -> List[Tuple[int, List[List[str]]]]:
     purchases: List[Tuple[int, List[List[str]]]] = []
 
-    lotto_items = page.locator("li:has-text('로또6/45')").all()
-    LOG.info(f"로또6/45 포함 리스트 아이템 수: {len(lotto_items)}")
+    body_list = page.locator("ul.whl-body")
+    if body_list.count() == 0:
+        LOG.info("구매 내역 리스트(ul.whl-body) 없음")
+        return purchases
+
+    lotto_items = body_list.locator("> li").all()
+    LOG.info(f"구매 내역 리스트 아이템 수: {len(lotto_items)}")
 
     for idx, item in enumerate(lotto_items):
         item_text = item.inner_text()
-        LOG.debug(f"로또 아이템 {idx}: {item_text[:200]}...")
+        LOG.debug(f"구매 아이템 {idx}: {item_text[:200]}...")
 
         draw_no = extract_draw_number_from_lotto_item(item_text)
         if not draw_no:
             LOG.debug(f"  -> 회차 추출 실패")
             continue
 
-        nums = extract_lotto_numbers_from_purchase_codes(item_text)
-        if not nums:
-            nums = extract_numbers_from_text(item_text)
+        nums = extract_numbers_from_text(item_text)
 
         LOG.debug(f"  -> 회차: {draw_no}, 번호 그룹 수: {len(nums)}")
         if nums:
@@ -171,14 +226,21 @@ def run(playwright: Playwright, config: Config) -> None:
         LOG.info(f"구매/당첨 내역 페이지 로드 완료. 현재 URL: {page.url}")
 
         LOG.info("조회 기간을 최근 1개월로 설정")
-        _click_search_with_monthly_range(page, config.timeout_ms)
+        _click_search_with_monthly_range(page)
 
         purchases: List[Tuple[int, List[List[str]]]] = []
 
         try:
-            purchases = _parse_purchases_from_list(page)
+            purchases = _parse_purchases_from_api(page)
         except Exception as e:
-            LOG.error(f"리스트 파싱 실패: {e}")
+            LOG.error(f"API 파싱 실패: {e}")
+
+        if not purchases:
+            LOG.info("API에서 구매 내역을 찾지 못함. 리스트에서 재시도")
+            try:
+                purchases = _parse_purchases_from_list(page)
+            except Exception as e:
+                LOG.error(f"리스트 파싱 실패: {e}")
 
         if not purchases:
             LOG.info("리스트에서 구매 내역을 찾지 못함. 테이블에서 재시도")
