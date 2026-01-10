@@ -278,7 +278,9 @@ def run(playwright: Playwright, config: Config) -> None:
 
         try:
             buy_area = target.locator("#num2, #amoundApply, #btnSelectNum")
-            if buy_area.count() == 0:
+            buy_area_count = buy_area.count()
+            LOG.info(f"구매 영역 요소 수: {buy_area_count}")
+            if buy_area_count == 0:
                 site_msg = extract_site_message(target)
                 if check_session_expired(site_msg):
                     raise RuntimeError(f"세션이 만료되었습니다. 다시 로그인해주세요. 사이트 메시지: {site_msg}")
@@ -295,6 +297,7 @@ def run(playwright: Playwright, config: Config) -> None:
         auto_tab = target.locator("#num2")
         try:
             auto_tab.wait_for(state="visible", timeout=min(config.timeout_ms, 10000))
+            LOG.info("자동번호 탭(#num2) 발견")
         except Exception:
             site_msg = extract_site_message(target)
             if check_session_expired(site_msg):
@@ -303,39 +306,53 @@ def run(playwright: Playwright, config: Config) -> None:
                 raise PurchaseUnavailableError(f"현재 구매 불가 시간대입니다. 사이트 메시지: {site_msg}")
             raise PurchaseUnavailableError(f"구매 페이지를 불러올 수 없습니다. 사이트 메시지: {site_msg or '없음'}")
         auto_tab.click()
+        LOG.info("자동번호 탭 클릭 완료")
         time.sleep(0.5)
 
         select_locator = target.locator("#amoundApply")
         select_locator.wait_for(state="visible", timeout=config.timeout_ms)
+        LOG.info(f"수량 선택 드롭다운 발견, {config.count}개 선택 시도")
         select_locator.select_option(str(config.count))
+        LOG.info("수량 선택 완료")
         time.sleep(0.3)
 
         confirm_btn = target.locator("#btnSelectNum")
         confirm_btn.wait_for(state="visible", timeout=config.timeout_ms)
+        LOG.info("번호확인 버튼 발견")
         confirm_btn.click()
+        LOG.info("번호확인 버튼 클릭 완료")
         time.sleep(0.5)
 
         select_gbn_a = target.locator("#selectGbnA")
         try:
             select_gbn_a.wait_for(state="visible", timeout=5000)
-            if select_gbn_a.inner_text() == "미지정":
+            gbn_text = select_gbn_a.inner_text()
+            LOG.info(f"선택 상태 텍스트: {gbn_text}")
+            if gbn_text == "미지정":
                 raise RuntimeError("번호 선택이 적용되지 않았습니다.")
-        except Exception:
-            pass
+        except RuntimeError:
+            raise
+        except Exception as e:
+            LOG.warning(f"선택 상태 확인 실패: {e}")
 
         buy_btn = target.locator("button#btnBuy")
         buy_btn.wait_for(state="visible", timeout=config.timeout_ms)
+        LOG.info("구매하기 버튼 발견")
         buy_btn.click()
+        LOG.info("구매하기 버튼 클릭 완료")
 
         dialog = wait_for_dialog(target, timeout_ms=10000)
+        LOG.info(f"다이얼로그 결과: {dialog}")
         if dialog and dialog[0] == "confirm":
             followup = wait_for_dialog(target, timeout_ms=5000)
+            LOG.info(f"후속 다이얼로그: {followup}")
             if followup and followup[0] == "alert":
                 raise RuntimeError(followup[1] or "구매 과정에서 오류가 발생했습니다.")
         elif dialog and dialog[0] == "alert":
             raise RuntimeError(dialog[1] or "구매 과정에서 오류가 발생했습니다.")
 
         safe_click(target, "input[name='closeLayer']")
+        LOG.info("구매 플로우 완료")
 
         notify(
             config,
