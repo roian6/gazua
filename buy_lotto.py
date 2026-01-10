@@ -66,9 +66,13 @@ def read_layer_message(layer) -> str:
 def wait_for_dialog(target, timeout_ms: int) -> Optional[Tuple[str, str]]:
     confirm_layer = target.locator("#popupLayerConfirm")
     alert_layer = target.locator("#popupLayerAlert")
+    limit_popup = target.locator("#recommend720Plus")
     end_time = time.time() + timeout_ms / 1000
 
     while time.time() < end_time:
+        if limit_popup.count() > 0 and limit_popup.is_visible():
+            LOG.info("구매 한도 초과 팝업 발견")
+            return "limit", "주간 구매 한도 초과"
         if confirm_layer.is_visible():
             message = read_layer_message(confirm_layer)
             LOG.debug(f"confirm 다이얼로그 발견: {message}")
@@ -243,8 +247,18 @@ def run(playwright: Playwright, config: Config) -> None:
             iframe_src = iframe_el.get_attribute("src")
             LOG.warning(f"프레임 로드 실패. iframe src로 직접 이동 시도: {iframe_src}")
             if iframe_src:
+                page.set_extra_http_headers({
+                    "Referer": GAME_URL,
+                    "Origin": "https://el.dhlottery.co.kr"
+                })
+                existing_cookies = context.cookies()
+                for cookie in existing_cookies:
+                    if cookie.get("domain") and "dhlottery" in cookie.get("domain", ""):
+                        LOG.debug(f"기존 쿠키 유지: {cookie.get('name')} @ {cookie.get('domain')}")
+                
                 page.goto(iframe_src, wait_until="domcontentloaded")
                 page.wait_for_load_state("load", timeout=config.timeout_ms)
+                LOG.info(f"직접 이동 완료. 현재 URL: {page.url}")
                 target = page
             else:
                 raise RuntimeError("iframe src를 찾을 수 없습니다.")
@@ -349,13 +363,17 @@ def run(playwright: Playwright, config: Config) -> None:
 
         dialog = wait_for_dialog(target, timeout_ms=10000)
         LOG.info(f"다이얼로그 결과: {dialog}")
-        if dialog and dialog[0] == "confirm":
+        if dialog and dialog[0] == "limit":
+            raise WeeklyLimitExceededError(dialog[1])
+        elif dialog and dialog[0] == "confirm":
             followup = wait_for_dialog(target, timeout_ms=15000)
             LOG.info(f"후속 다이얼로그: {followup}")
             if followup is None:
                 LOG.warning("구매 확인 후 응답 다이얼로그를 받지 못함 - 구매 실패 가능성")
                 raise RuntimeError("구매 확인 후 응답을 받지 못했습니다. 마이페이지에서 확인하세요.")
-            if followup[0] == "alert":
+            if followup[0] == "limit":
+                raise WeeklyLimitExceededError(followup[1])
+            elif followup[0] == "alert":
                 alert_msg = followup[1]
                 if "성공" in alert_msg or "완료" in alert_msg or "구매" in alert_msg:
                     LOG.info(f"구매 성공 메시지 확인: {alert_msg}")
