@@ -35,7 +35,16 @@ def extract_draw_number_from_text(text: str) -> Optional[int]:
     match = re.search(r"(\d{4})회", text)
     if match:
         return int(match.group(1))
-    match = re.search(r"\b(\d{4})\b", text)
+    return None
+
+
+def extract_draw_number_from_lotto_item(text: str) -> Optional[int]:
+    """Extract draw number specifically from lotto purchase item text.
+
+    In the new site, draw number appears as standalone 4-digit number
+    in a row containing '로또6/45'. Valid lotto draw numbers are 1000-1500 range.
+    """
+    match = re.search(r"\b(1[0-5]\d{2})\b", text)
     if match:
         return int(match.group(1))
     return None
@@ -88,30 +97,27 @@ def _click_search_with_monthly_range(page, timeout_ms: int) -> None:
             LOG.info("최근 1개월 버튼 클릭")
             page.wait_for_timeout(500)
 
-            search_button = page.locator("button:has-text('검색')")
-            if search_button.count() > 0:
-                search_button.click()
-                LOG.info("검색 버튼 클릭")
-                page.wait_for_timeout(2000)
+            search_button = page.locator("button:has-text('검색')").first
+            search_button.click()
+            LOG.info("검색 버튼 클릭")
+            page.wait_for_timeout(2000)
     except Exception as e:
         LOG.warning(f"조회 기간 설정 실패, 기본값으로 진행: {e}")
 
 
 def _parse_purchases_from_list(page) -> List[Tuple[int, List[List[str]]]]:
     purchases: List[Tuple[int, List[List[str]]]] = []
-    items = page.locator("ul > li, ol > li").all()
-    LOG.info(f"리스트 아이템 수: {len(items)}")
 
-    for idx, item in enumerate(items):
+    lotto_items = page.locator("li:has-text('로또6/45')").all()
+    LOG.info(f"로또6/45 포함 리스트 아이템 수: {len(lotto_items)}")
+
+    for idx, item in enumerate(lotto_items):
         item_text = item.inner_text()
+        LOG.debug(f"로또 아이템 {idx}: {item_text[:200]}...")
 
-        if "로또6/45" not in item_text:
-            continue
-
-        LOG.debug(f"로또 아이템 {idx}: {item_text[:150]}...")
-
-        draw_no = extract_draw_number_from_text(item_text)
+        draw_no = extract_draw_number_from_lotto_item(item_text)
         if not draw_no:
+            LOG.debug(f"  -> 회차 추출 실패")
             continue
 
         nums = extract_lotto_numbers_from_purchase_codes(item_text)
