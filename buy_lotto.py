@@ -265,90 +265,43 @@ def extract_site_message(target) -> str:
 
 
 def _execute_buy_ui_flow(page, context, config) -> None:
-    for attempt in range(3):
-        try:
-            LOG.info(f"게임 페이지 이동 시도 {attempt + 1}/3")
-            LOG.debug(f"GAME_URL: {GAME_URL}")
-            page.set_extra_http_headers({"Referer": f"{BASE_URL}/main"})
+    LOG.info("게임 페이지 세션 초기화")
+    LOG.debug(f"GAME_URL: {GAME_URL}")
+    page.set_extra_http_headers({"Referer": f"{BASE_URL}/main"})
 
-            try:
-                response = page.goto(GAME_URL, wait_until="domcontentloaded")
-                if response:
-                    LOG.info(f"goto 응답: status={response.status}, url={response.url}")
-                else:
-                    LOG.warning("goto 응답이 None입니다")
-            except Exception as goto_err:
-                LOG.error(f"goto 실패: {type(goto_err).__name__}: {goto_err}")
-                LOG.error(f"현재 URL: {page.url}")
-                raise
-
-            page.wait_for_load_state("load", timeout=config.timeout_ms)
-
-            if "m.dhlottery.co.kr" in page.url:
-                LOG.warning(f"모바일 페이지로 리다이렉트됨: {page.url}")
-                context.add_cookies([
-                    {"name": "PC_VER", "value": "Y", "domain": ".dhlottery.co.kr", "path": "/"}
-                ])
-                time.sleep(1)
-                continue
-
-            if "/login" in page.url.lower() or "login" in page.url.lower():
-                body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
-                LOG.error("페이지 내용 덤프: %s", body_text)
-                raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
-
-            page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
-
-            iframe_el = page.locator("iframe#ifrm_tab")
-            iframe_src = iframe_el.get_attribute("src")
-            LOG.info(f"iframe src 속성: {iframe_src}")
-
-            break
-        except Exception as exc:
-            LOG.error(f"시도 {attempt + 1}/3 실패: {type(exc).__name__}: {exc}")
-            if attempt == 2:
-                if config.debug_artifacts:
-                    capture_screenshot(page, config.debug_dir, "game_page_error")
-                    save_page_html(page, config.debug_dir, "game_page_error")
-
-                try:
-                    body_text = page.locator("body").inner_text()[:1000].replace("\n", " ")
-                except Exception:
-                    body_text = "텍스트 추출 실패"
-
-                LOG.error("게임 페이지 로딩 실패. URL: %s, 제목: %s", page.url, page.title())
-                LOG.error("실패 시점 페이지 내용: %s", body_text)
-                raise RuntimeError(f"게임 프레임을 찾을 수 없습니다. 현재 URL: {page.url}") from exc
-            time.sleep(2)
-
-    game_frame = page.frame(name="ifrm_tab")
-    if not game_frame:
-        raise RuntimeError("게임 프레임을 찾지 못했습니다.")
-
-    LOG.info(f"게임 프레임 URL: {game_frame.url}")
-
-    if "chrome-error" in game_frame.url or game_frame.url == "about:blank":
-        iframe_el = page.locator("iframe#ifrm_tab")
-        iframe_src = iframe_el.get_attribute("src")
-        LOG.warning(f"프레임 로드 실패. iframe src로 직접 이동 시도: {iframe_src}")
-        if iframe_src:
-            page.set_extra_http_headers({
-                "Referer": GAME_URL,
-                "Origin": "https://el.dhlottery.co.kr",
-            })
-            existing_cookies = context.cookies()
-            for cookie in existing_cookies:
-                if cookie.get("domain") and "dhlottery" in cookie.get("domain", ""):
-                    LOG.debug(f"기존 쿠키 유지: {cookie.get('name')} @ {cookie.get('domain')}")
-
-            page.goto(iframe_src, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=config.timeout_ms)
-            LOG.info(f"직접 이동 완료. 현재 URL: {page.url}")
-            target = page
+    try:
+        response = page.goto(GAME_URL, wait_until="domcontentloaded")
+        if response:
+            LOG.info(f"goto 응답: status={response.status}, url={response.url}")
         else:
-            raise RuntimeError("iframe src를 찾을 수 없습니다.")
-    else:
-        target = game_frame
+            LOG.warning("goto 응답이 None입니다")
+    except Exception as goto_err:
+        LOG.error(f"goto 실패: {type(goto_err).__name__}: {goto_err}")
+        LOG.error(f"현재 URL: {page.url}")
+        raise
+
+    page.wait_for_load_state("load", timeout=config.timeout_ms)
+
+    if "m.dhlottery.co.kr" in page.url:
+        LOG.warning(f"모바일 페이지로 리다이렉트됨: {page.url}")
+        context.add_cookies([
+            {"name": "PC_VER", "value": "Y", "domain": ".dhlottery.co.kr", "path": "/"}
+        ])
+        time.sleep(1)
+
+    if "/login" in page.url.lower() or "login" in page.url.lower():
+        body_text = page.locator("body").inner_text()[:500].replace("\n", " ")
+        LOG.error("페이지 내용 덤프: %s", body_text)
+        raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
+
+    page.set_extra_http_headers({
+        "Referer": GAME_URL,
+        "Origin": "https://el.dhlottery.co.kr",
+    })
+    page.goto(GAME_CONTEXT_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("load", timeout=config.timeout_ms)
+    LOG.info(f"게임 iframe 직접 이동 완료. 현재 URL: {page.url}")
+    target = page
 
     wait_for_overlay_hidden(target, "#popupLayer", timeout_ms=config.queue_timeout_ms)
 
