@@ -35,7 +35,112 @@ def extract_draw_number_from_text(text: str) -> Optional[int]:
     match = re.search(r"(\d{4})회", text)
     if match:
         return int(match.group(1))
+    match = re.search(r"\b(\d{4})\b", text)
+    if match:
+        return int(match.group(1))
     return None
+
+
+def extract_lotto_numbers_from_purchase_codes(text: str) -> List[List[str]]:
+    """Parse 5-digit purchase codes (e.g., '63035 60450') into lotto numbers.
+
+    Each 5-digit code's last 2 digits represent a lotto number (01-45).
+    A valid lotto entry has 6 unique numbers from 6+ codes.
+    """
+    all_numbers: List[List[str]] = []
+    code_pattern = r"(\d{5}(?:\s+\d{5})*)"
+    matches = re.findall(code_pattern, text)
+
+    for match in matches:
+        codes = match.split()
+        if len(codes) < 5:
+            continue
+
+        numbers = []
+        for code in codes:
+            if len(code) == 5:
+                num = int(code[-2:])
+                if 1 <= num <= 45:
+                    numbers.append(str(num).zfill(2))
+
+        if len(numbers) >= 6:
+            seen = set()
+            unique_nums = []
+            for n in numbers:
+                if n not in seen:
+                    seen.add(n)
+                    unique_nums.append(n)
+                    if len(unique_nums) == 6:
+                        break
+            if len(unique_nums) == 6:
+                all_numbers.append(unique_nums)
+
+    return all_numbers
+
+
+def _click_search_with_monthly_range(page, timeout_ms: int) -> None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+
+        month_button = page.locator("button:has-text('최근 1개월')")
+        if month_button.count() > 0:
+            month_button.click()
+            LOG.info("최근 1개월 버튼 클릭")
+            page.wait_for_timeout(500)
+
+            search_button = page.locator("button:has-text('검색')")
+            if search_button.count() > 0:
+                search_button.click()
+                LOG.info("검색 버튼 클릭")
+                page.wait_for_timeout(2000)
+    except Exception as e:
+        LOG.warning(f"조회 기간 설정 실패, 기본값으로 진행: {e}")
+
+
+def _parse_purchases_from_list(page) -> List[Tuple[int, List[List[str]]]]:
+    purchases: List[Tuple[int, List[List[str]]]] = []
+    items = page.locator("ul > li, ol > li").all()
+    LOG.info(f"리스트 아이템 수: {len(items)}")
+
+    for idx, item in enumerate(items):
+        item_text = item.inner_text()
+
+        if "로또6/45" not in item_text:
+            continue
+
+        LOG.debug(f"로또 아이템 {idx}: {item_text[:150]}...")
+
+        draw_no = extract_draw_number_from_text(item_text)
+        if not draw_no:
+            continue
+
+        nums = extract_lotto_numbers_from_purchase_codes(item_text)
+        if not nums:
+            nums = extract_numbers_from_text(item_text)
+
+        LOG.debug(f"  -> 회차: {draw_no}, 번호 그룹 수: {len(nums)}")
+        if nums:
+            purchases.append((draw_no, nums))
+
+    return purchases
+
+
+def _parse_purchases_from_table(page) -> List[Tuple[int, List[List[str]]]]:
+    purchases: List[Tuple[int, List[List[str]]]] = []
+    rows = page.locator("table tbody tr").all()
+    LOG.info(f"테이블 행 수: {len(rows)}")
+
+    for idx, row in enumerate(rows):
+        row_text = row.inner_text()
+        LOG.debug(f"행 {idx}: {row_text[:100]}...")
+        draw_no = extract_draw_number_from_text(row_text)
+        if draw_no:
+            nums = extract_numbers_from_text(row_text)
+            LOG.debug(f"  -> 회차: {draw_no}, 번호 그룹 수: {len(nums)}")
+            if nums:
+                purchases.append((draw_no, nums))
+
+    return purchases
 
 
 def run(playwright: Playwright, config: Config) -> None:
@@ -59,33 +164,27 @@ def run(playwright: Playwright, config: Config) -> None:
         page.goto(ledger_url, wait_until="domcontentloaded")
         LOG.info(f"구매/당첨 내역 페이지 로드 완료. 현재 URL: {page.url}")
 
-        try:
-            page.wait_for_selector(".tbl_data, table", timeout=config.timeout_ms)
-            LOG.info("테이블 셀렉터 발견")
-        except Exception as e:
-            LOG.warning(f"테이블 셀렉터 대기 실패: {e}")
+        LOG.info("조회 기간을 최근 1개월로 설정")
+        _click_search_with_monthly_range(page, config.timeout_ms)
 
         purchases: List[Tuple[int, List[List[str]]]] = []
 
         try:
-            rows = page.locator("table tbody tr").all()
-            LOG.info(f"테이블 행 수: {len(rows)}")
-            for idx, row in enumerate(rows):
-                row_text = row.inner_text()
-                LOG.debug(f"행 {idx}: {row_text[:100]}...")
-                draw_no = extract_draw_number_from_text(row_text)
-                if draw_no:
-                    nums = extract_numbers_from_text(row_text)
-                    LOG.debug(f"  -> 회차: {draw_no}, 번호 그룹 수: {len(nums)}")
-                    if nums:
-                        purchases.append((draw_no, nums))
+            purchases = _parse_purchases_from_list(page)
         except Exception as e:
-            LOG.error(f"테이블 파싱 실패: {e}")
-
-        LOG.info(f"테이블에서 추출한 구매 건수: {len(purchases)}")
+            LOG.error(f"리스트 파싱 실패: {e}")
 
         if not purchases:
-            LOG.info("테이블에서 구매 내역을 찾지 못함. body 텍스트에서 재시도")
+            LOG.info("리스트에서 구매 내역을 찾지 못함. 테이블에서 재시도")
+            try:
+                purchases = _parse_purchases_from_table(page)
+            except Exception as e:
+                LOG.error(f"테이블 파싱 실패: {e}")
+
+        LOG.info(f"추출한 구매 건수: {len(purchases)}")
+
+        if not purchases:
+            LOG.info("구매 내역을 찾지 못함. body 텍스트에서 재시도")
             body_text = page.locator("body").inner_text()
             LOG.debug(f"Body 텍스트 (처음 500자): {body_text[:500]}")
             draw_no = extract_draw_number_from_text(body_text)
