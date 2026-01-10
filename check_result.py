@@ -1,6 +1,5 @@
 import logging
 import re
-from datetime import timedelta
 from typing import List, Optional, Tuple
 
 from playwright.sync_api import Playwright, sync_playwright
@@ -15,7 +14,6 @@ from config import (
 from lotto_utils import (
     extract_numbers_from_text,
     fetch_lotto_result_by_round,
-    get_now,
 )
 from lotto_web import capture_screenshot, login, save_page_html
 from slack_notify import notify
@@ -55,17 +53,11 @@ def run(playwright: Playwright, config: Config) -> None:
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
         LOG.info("로그인 완료")
 
-        now = get_now()
-        end_date = now.date()
-        start_date = end_date - timedelta(days=60)
-        start_date_str = start_date.strftime("%Y%m%d")
-        end_date_str = end_date.strftime("%Y%m%d")
-
-        LOG.info(f"구매 내역 페이지로 이동 (조회 기간: {start_date_str} ~ {end_date_str})")
-        ledger_url = f"https://dhlottery.co.kr/mypage/selectMyLottoLedgerList.do?srchStrDt={start_date_str}&srchEndDt={end_date_str}"
+        LOG.info("구매/당첨 내역 페이지로 이동")
+        ledger_url = "https://www.dhlottery.co.kr/mypage/mylotteryledger"
         LOG.debug(f"Ledger URL: {ledger_url}")
         page.goto(ledger_url, wait_until="domcontentloaded")
-        LOG.info(f"구매 내역 페이지 로드 완료. 현재 URL: {page.url}")
+        LOG.info(f"구매/당첨 내역 페이지 로드 완료. 현재 URL: {page.url}")
 
         try:
             page.wait_for_selector(".tbl_data, table", timeout=config.timeout_ms)
