@@ -16,7 +16,6 @@ from lotto_utils import (
     extract_numbers_from_text,
     fetch_lotto_result_by_round,
     get_now,
-    get_result_check_status,
 )
 from lotto_web import capture_screenshot, login, save_page_html
 from slack_notify import notify
@@ -47,15 +46,14 @@ def run(playwright: Playwright, config: Config) -> None:
     page = None
 
     try:
+        LOG.info("브라우저 컨텍스트 생성 시작")
         browser, context = create_browser_context(playwright, config)
         page = create_page(context, config)
+        LOG.info("브라우저 컨텍스트 생성 완료")
 
+        LOG.info("로그인 시작")
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
-
-        is_result_available, result_status, result_message = get_result_check_status()
-        if not is_result_available:
-            notify(config, result_message or "현재 결과를 확인할 수 없습니다.")
-            return
+        LOG.info("로그인 완료")
 
         now = get_now()
         end_date = now.date()
@@ -63,42 +61,55 @@ def run(playwright: Playwright, config: Config) -> None:
         start_date_str = start_date.strftime("%Y%m%d")
         end_date_str = end_date.strftime("%Y%m%d")
 
-        LOG.info("구매 내역 페이지로 이동합니다... (조회 기간: %s ~ %s)", start_date_str, end_date_str)
+        LOG.info(f"구매 내역 페이지로 이동 (조회 기간: {start_date_str} ~ {end_date_str})")
         ledger_url = f"https://dhlottery.co.kr/mypage/selectMyLottoLedgerList.do?srchStrDt={start_date_str}&srchEndDt={end_date_str}"
+        LOG.debug(f"Ledger URL: {ledger_url}")
         page.goto(ledger_url, wait_until="domcontentloaded")
+        LOG.info(f"구매 내역 페이지 로드 완료. 현재 URL: {page.url}")
 
         try:
             page.wait_for_selector(".tbl_data, table", timeout=config.timeout_ms)
-        except Exception:
-            LOG.warning("구매 내역 테이블을 찾을 수 없습니다.")
+            LOG.info("테이블 셀렉터 발견")
+        except Exception as e:
+            LOG.warning(f"테이블 셀렉터 대기 실패: {e}")
 
         purchases: List[Tuple[int, List[List[str]]]] = []
 
         try:
             rows = page.locator("table tbody tr").all()
-            for row in rows:
+            LOG.info(f"테이블 행 수: {len(rows)}")
+            for idx, row in enumerate(rows):
                 row_text = row.inner_text()
+                LOG.debug(f"행 {idx}: {row_text[:100]}...")
                 draw_no = extract_draw_number_from_text(row_text)
                 if draw_no:
                     nums = extract_numbers_from_text(row_text)
+                    LOG.debug(f"  -> 회차: {draw_no}, 번호 그룹 수: {len(nums)}")
                     if nums:
                         purchases.append((draw_no, nums))
         except Exception as e:
             LOG.error(f"테이블 파싱 실패: {e}")
 
+        LOG.info(f"테이블에서 추출한 구매 건수: {len(purchases)}")
+
         if not purchases:
+            LOG.info("테이블에서 구매 내역을 찾지 못함. body 텍스트에서 재시도")
             body_text = page.locator("body").inner_text()
+            LOG.debug(f"Body 텍스트 (처음 500자): {body_text[:500]}")
             draw_no = extract_draw_number_from_text(body_text)
             nums = extract_numbers_from_text(body_text)
+            LOG.info(f"Body에서 추출: 회차={draw_no}, 번호 그룹 수={len(nums) if nums else 0}")
             if draw_no and nums:
                 purchases.append((draw_no, nums))
 
         if not purchases:
+            LOG.warning("구매 내역을 찾지 못함")
             notify(config, "구매 내역을 찾을 수 없습니다. 마이페이지에서 확인해주세요.")
             return
 
         latest_draw_no = max(p[0] for p in purchases)
         latest_purchases = [p for p in purchases if p[0] == latest_draw_no]
+        LOG.info(f"최근 구매 회차: {latest_draw_no}회, 해당 회차 구매 건수: {len(latest_purchases)}")
 
         my_numbers: List[List[str]] = []
         for _, nums in latest_purchases:
@@ -113,17 +124,21 @@ def run(playwright: Playwright, config: Config) -> None:
                 unique_numbers.append(group)
         my_numbers = unique_numbers
 
-        LOG.info(f"최근 구매 회차: {latest_draw_no}회, 구매 번호 수: {len(my_numbers)}")
+        LOG.info(f"중복 제거 후 구매 번호 수: {len(my_numbers)}")
+        for idx, nums in enumerate(my_numbers, 1):
+            LOG.debug(f"  {idx}. {', '.join(nums)}")
 
+        LOG.info(f"{latest_draw_no}회 당첨 결과 조회 시작")
         result = fetch_lotto_result_by_round(latest_draw_no)
         if not result:
-            notify(
-                config,
-                f"{latest_draw_no}회 당첨 결과를 가져오지 못했습니다. 아직 추첨 전이거나 결과가 집계 중일 수 있습니다.",
-            )
+            msg = f"{latest_draw_no}회 당첨 결과를 가져오지 못했습니다. 아직 추첨 전이거나 결과가 집계 중일 수 있습니다."
+            LOG.warning(msg)
+            notify(config, msg)
             return
 
         draw_no, draw_date, numbers, bonus = result
+        LOG.info(f"당첨 결과: {draw_no}회, 날짜={draw_date}, 번호={numbers}, 보너스={bonus}")
+
         date_fmt = (
             f"{draw_date[:4]}-{draw_date[4:6]}-{draw_date[6:]}"
             if draw_date and len(draw_date) == 8
@@ -141,8 +156,10 @@ def run(playwright: Playwright, config: Config) -> None:
         for idx, group in enumerate(my_numbers, start=1):
             result_msg += f"{idx}. " + get_check_lucky_number(lucky_numbers, group) + "\n"
         notify(config, f"> {draw_no}회 나의 행운의 번호 결과는?!?!\n{result_msg}")
+        LOG.info("결과 알림 전송 완료")
 
     except Exception as exc:
+        LOG.error(f"에러 발생: {exc}", exc_info=True)
         if config.debug_artifacts and page:
             capture_screenshot(page, config.debug_dir, "check_result_error")
             save_page_html(page, config.debug_dir, "check_result_error")
@@ -153,6 +170,7 @@ def run(playwright: Playwright, config: Config) -> None:
             context.close()
         if browser is not None:
             browser.close()
+        LOG.info("브라우저 종료")
 
 
 if __name__ == "__main__":
