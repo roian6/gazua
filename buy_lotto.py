@@ -146,6 +146,11 @@ def run(playwright: Playwright, config: Config) -> None:
 
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
         LOG.info("로그인 후 현재 URL: %s", page.url)
+        
+        cookies = context.cookies()
+        LOG.debug(f"현재 쿠키 수: {len(cookies)}")
+        for c in cookies:
+            LOG.debug(f"쿠키: {c.get('name')}={str(c.get('value', ''))[:20]}... domain={c.get('domain')}")
 
         is_sale_available, sale_status, sale_message = get_sale_status()
         if not is_sale_available:
@@ -198,6 +203,11 @@ def run(playwright: Playwright, config: Config) -> None:
                     raise RuntimeError(f"게임 페이지 접근 실패 - 로그인 페이지로 리다이렉트됨: {page.url}")
 
                 page.wait_for_selector("iframe#ifrm_tab", state="attached", timeout=config.timeout_ms)
+                
+                iframe_el = page.locator("iframe#ifrm_tab")
+                iframe_src = iframe_el.get_attribute("src")
+                LOG.info(f"iframe src 속성: {iframe_src}")
+                
                 break
             except Exception as exc:
                 LOG.error(f"시도 {attempt + 1}/3 실패: {type(exc).__name__}: {exc}")
