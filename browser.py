@@ -10,6 +10,7 @@ from config import USER_AGENT, Config
 STEALTH_SCRIPT = """
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
     window.navigator.chrome = { runtime: {} };
 """
 
