@@ -33,6 +33,95 @@ def get_check_lucky_number(lucky_numbers: List[str], my_numbers: List[str]) -> s
     return return_msg
 
 
+PRIZE_TIERS = {
+    1: {"name": "1등", "prize": "~18억+"},
+    2: {"name": "2등", "prize": "~6천만"},
+    3: {"name": "3등", "prize": "~140만"},
+    4: {"name": "4등", "prize": "5만원"},
+    5: {"name": "5등", "prize": "5천원"},
+}
+
+
+def calculate_prize_tier(
+    my_numbers: List[str],
+    winning_numbers: List[str],
+    bonus: Optional[str],
+) -> Tuple[int, int, bool]:
+    """Returns (tier, main_match_count, bonus_matched). tier=0 means no prize."""
+    main_matches = len(set(my_numbers) & set(winning_numbers))
+    bonus_matched = bonus is not None and bonus in my_numbers
+    
+    if main_matches == 6:
+        return 1, main_matches, bonus_matched
+    elif main_matches == 5 and bonus_matched:
+        return 2, main_matches, bonus_matched
+    elif main_matches == 5:
+        return 3, main_matches, bonus_matched
+    elif main_matches == 4:
+        return 4, main_matches, bonus_matched
+    elif main_matches == 3:
+        return 5, main_matches, bonus_matched
+    else:
+        return 0, main_matches, bonus_matched
+
+
+def format_ticket_result(
+    idx: int,
+    my_numbers: List[str],
+    winning_numbers: List[str],
+    bonus: Optional[str],
+) -> str:
+    tier, main_matches, bonus_matched = calculate_prize_tier(
+        my_numbers, winning_numbers, bonus
+    )
+    
+    num_display = ""
+    for num in my_numbers:
+        if num in winning_numbers:
+            num_display += f"*[{num}]* "
+        elif num == bonus:
+            num_display += f"({num}) "
+        else:
+            num_display += f"{num} "
+    
+    match_info = f"{main_matches}개"
+    if bonus_matched:
+        match_info += "+보너스"
+    
+    if tier > 0:
+        prize_info = PRIZE_TIERS[tier]
+        return f"{idx}. {num_display.strip()}  →  *{prize_info['name']}* 🎉 ({match_info}, {prize_info['prize']})"
+    return f"{idx}. {num_display.strip()}  →  낙첨 ({match_info})"
+
+
+def format_results_summary(
+    my_numbers: List[List[str]],
+    winning_numbers: List[str],
+    bonus: Optional[str],
+) -> Tuple[str, Dict[int, int]]:
+    """Returns (formatted_message, tier_count_dict)."""
+    lines = []
+    tier_counts: Dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    
+    for idx, ticket in enumerate(my_numbers, start=1):
+        lines.append(format_ticket_result(idx, ticket, winning_numbers, bonus))
+        tier, _, _ = calculate_prize_tier(ticket, winning_numbers, bonus)
+        if tier > 0:
+            tier_counts[tier] += 1
+    
+    total_wins = sum(tier_counts.values())
+    if total_wins > 0:
+        summary_parts = [
+            f"{PRIZE_TIERS[t]['name']}: {tier_counts[t]}개"
+            for t in range(1, 6) if tier_counts[t] > 0
+        ]
+        summary = "🏆 *당첨!* " + ", ".join(summary_parts)
+    else:
+        summary = "😅 이번 회차는 당첨되지 않았습니다"
+    
+    return "\n".join(lines) + "\n\n" + summary, tier_counts
+
+
 def extract_draw_number_from_text(text: str) -> Optional[int]:
     match = re.search(r"(\d{4})회", text)
     if match:
@@ -307,13 +396,10 @@ def run(playwright: Playwright, config: Config) -> None:
         bonus_text = bonus or "-"
         notify(
             config,
-            f"로또 결과: {draw_no}회 ({date_fmt}) 당첨번호 {number_text} + {bonus_text}",
+            f"🎱 *{draw_no}회 당첨번호* ({date_fmt})\n`{number_text}` + 보너스 `{bonus_text}`",
         )
-        lucky_numbers = numbers + ([bonus] if bonus else [])
 
-        result_msg = ""
-        for idx, group in enumerate(my_numbers, start=1):
-            result_msg += f"{idx}. " + get_check_lucky_number(lucky_numbers, group) + "\n"
+        result_msg, _ = format_results_summary(my_numbers, numbers, bonus)
         notify(config, f"> {draw_no}회 나의 행운의 번호 결과는?!?!\n{result_msg}")
         LOG.info("결과 알림 전송 완료")
 
