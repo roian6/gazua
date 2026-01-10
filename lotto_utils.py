@@ -320,25 +320,33 @@ def fetch_latest_lotto_result() -> Optional[Tuple[int, Optional[str], List[str],
 def fetch_lotto_result_by_round(
     draw_no: int,
 ) -> Optional[Tuple[int, Optional[str], List[str], Optional[str]]]:
-    url = f"https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo={draw_no}"
+    """Fetch lotto result for a specific round.
+    
+    Uses the new API endpoint after site restructure (Jan 2026).
+    Old endpoint (common.do?method=getLottoNumber) now redirects to homepage.
+    """
+    url = f"https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd={draw_no}"
     try:
         res = Session().get(url, timeout=20)
         res.raise_for_status()
-        data = res.json()
-        if data.get("returnValue") != "success":
+        response = res.json()
+        
+        # New API returns {"data": {"list": [...]}}
+        data_list = response.get("data", {}).get("list", [])
+        if not data_list:
             return None
+        
+        data = data_list[0]
         numbers = [
-            str(data.get("drwtNo1")),
-            str(data.get("drwtNo2")),
-            str(data.get("drwtNo3")),
-            str(data.get("drwtNo4")),
-            str(data.get("drwtNo5")),
-            str(data.get("drwtNo6")),
+            str(data.get("tm1WnNo")),
+            str(data.get("tm2WnNo")),
+            str(data.get("tm3WnNo")),
+            str(data.get("tm4WnNo")),
+            str(data.get("tm5WnNo")),
+            str(data.get("tm6WnNo")),
         ]
-        bonus = data.get("bnusNo")
-        draw_date = data.get("drwNoDate")
-        if draw_date:
-            draw_date = draw_date.replace("-", "")
+        bonus = data.get("bnsWnNo")
+        draw_date = data.get("ltRflYmd")  # Already in YYYYMMDD format
         return draw_no, draw_date, numbers, str(bonus) if bonus else None
     except Exception as exc:
         LOG.warning(f"회차 {draw_no} 결과 조회 실패: {exc}")
