@@ -220,26 +220,139 @@ def is_drawing_in_progress(entry: Dict[str, Any]) -> bool:
     return False
 
 
+def _fetch_ticket_detail(
+    session: Session,
+    ntsl_ordr_no: str,
+    start_date: str,
+    end_date: str,
+    barcd: str,
+    debug_dir: Optional[str] = None,
+) -> List[List[str]]:
+    """Fetch actual lotto numbers from ticket detail API.
+    
+    This matches the new site structure (Jan 2026+) where numbers
+    are retrieved via a separate detail endpoint.
+    """
+    from urllib.parse import urlencode
+    
+    params = {
+        "ntslOrdrNo": ntsl_ordr_no,
+        "srchStrDt": start_date,
+        "srchEndDt": end_date,
+        "barcd": barcd,
+    }
+    query = urlencode({k: v for k, v in params.items() if v is not None})
+    url = f"https://www.dhlottery.co.kr/mypage/lotto645TicketDetail.do?{query}"
+    
+    payload, _ = fetch_json(
+        session,
+        url,
+        {},
+        "GET",
+        debug_dir,
+        label="ticket_detail",
+    )
+    
+    if not payload:
+        return []
+    
+    data = payload.get("data") or {}
+    ticket = data.get("ticket") or {}
+    games = ticket.get("game_dtl") or []
+    
+    numbers: List[List[str]] = []
+    for game in games:
+        nums = game.get("num") or []
+        if len(nums) == 6:
+            numbers.append([str(n).zfill(2) for n in nums])
+    
+    return numbers
+
+
 def fetch_today_purchase_numbers(
     session: Session,
     date_str: str,
     debug_dir: Optional[str] = None,
 ) -> Tuple[List[List[str]], Dict[str, Any]]:
-    params = {"srchStrDt": date_str, "srchEndDt": date_str}
-    endpoints = [
+    """Fetch purchased lotto numbers for a given date.
+    
+    Uses the new site API structure (Jan 2026+):
+    1. First fetches the ledger list to get purchase metadata
+    2. Then fetches ticket details to get actual numbers
+    """
+    attempts: List[Dict[str, Any]] = []
+    
+    # New primary endpoint (matches check_result.py)
+    ledger_url = (
+        f"https://www.dhlottery.co.kr/mypage/selectMyLotteryledger.do"
+        f"?srchStrDt={date_str}&srchEndDt={date_str}"
+        f"&sort=&ltGdsCd=LO40&winResult=&pageNum=1&recordCountPerPage=10"
+    )
+    
+    payload, meta = fetch_json(
+        session,
+        ledger_url,
+        {},
+        "GET",
+        debug_dir,
+        label="ledger_new_api",
+    )
+    attempts.append(meta)
+    
+    if payload:
+        data = payload.get("data") or {}
+        items = data.get("list") or []
+        
+        if items:
+            LOG.info(f"새 API에서 {len(items)}개 구매 항목 발견")
+            all_numbers: List[List[str]] = []
+            
+            for item in items:
+                if item.get("ltGdsCd") != "LO40":
+                    continue
+                
+                ntsl_ordr_no = item.get("ntslOrdrNo")
+                gm_info = item.get("gmInfo")
+                
+                if ntsl_ordr_no and gm_info:
+                    ticket_numbers = _fetch_ticket_detail(
+                        session,
+                        ntsl_ordr_no,
+                        date_str,
+                        date_str,
+                        gm_info,
+                        debug_dir,
+                    )
+                    if ticket_numbers:
+                        all_numbers.extend(ticket_numbers)
+                        LOG.info(f"티켓 상세에서 {len(ticket_numbers)}개 번호 그룹 추출")
+            
+            if all_numbers:
+                seen = set()
+                unique_numbers = []
+                for group in all_numbers:
+                    key = tuple(group)
+                    if key not in seen:
+                        seen.add(key)
+                        unique_numbers.append(group)
+                return unique_numbers, {"attempts": attempts}
+    
+    # Fallback to legacy endpoints for compatibility
+    legacy_params = {"srchStrDt": date_str, "srchEndDt": date_str}
+    legacy_endpoints = [
         "/mypage/selectMyLottoLedgerList.do",
         "/mypage/selectMylotteryledgerList.do",
         "/mypage/selectMyLottoBuyList.do",
         "/mypage/selectMyLottoList.do",
     ]
-    attempts: List[Dict[str, Any]] = []
+    
     entries: List[Dict[str, Any]] = []
-    for endpoint in endpoints:
+    for endpoint in legacy_endpoints:
         url = f"{BASE_URL}{endpoint}"
         payload, meta = fetch_json(
             session,
             url,
-            params,
+            legacy_params,
             "GET",
             debug_dir,
             label=f"ledger_{endpoint.strip('/').replace('/', '_')}",
@@ -249,7 +362,7 @@ def fetch_today_purchase_numbers(
             payload, meta = fetch_json(
                 session,
                 url,
-                params,
+                legacy_params,
                 "POST",
                 debug_dir,
                 label=f"ledger_{endpoint.strip('/').replace('/', '_')}_post",
