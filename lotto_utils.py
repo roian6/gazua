@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import pytz
 from requests import Session
@@ -59,10 +60,22 @@ def as_int(value: Any) -> int:
         return 0
 
 
-def build_session_from_context(context) -> Session:
+def build_session_from_context(
+    context,
+    proxy_address: Optional[str] = None,
+    proxy_user: Optional[str] = None,
+    proxy_pw: Optional[str] = None,
+) -> Session:
     session = Session()
     for cookie in context.cookies():
         session.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"])
+
+    if proxy_address:
+        auth = ""
+        if proxy_user and proxy_pw:
+            auth = f"{quote(proxy_user, safe='')}:{quote(proxy_pw, safe='')}@"
+        proxy_url = f"http://{auth}{proxy_address}"
+        session.proxies.update({"http": proxy_url, "https": proxy_url})
 
     session.headers.update({
         "User-Agent": USER_AGENT,

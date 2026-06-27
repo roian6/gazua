@@ -448,7 +448,12 @@ def run(playwright: Playwright, config: Config) -> None:
             notify(config, sale_message or "현재 구매 불가 시간대입니다.")
             return
 
-        session = build_session_from_context(context)
+        session = build_session_from_context(
+            context,
+            proxy_address=config.proxy_address,
+            proxy_user=config.proxy_user,
+            proxy_pw=config.proxy_pw,
+        )
         balance, user_mndp = fetch_user_balance(session)
         user_name = (
             user_mndp.get("userNm")
