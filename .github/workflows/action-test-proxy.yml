@@ -10,6 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Connect home proxy
+        uses: ./.github/actions/connect-home-proxy
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:

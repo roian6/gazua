@@ -1,0 +1,29 @@
+name: Connect Home Proxy
+description: Connect a GitHub Actions runner to the tailnet so it can reach the home Raspberry Pi proxy.
+
+inputs:
+  oauth-client-id:
+    description: Tailscale OAuth client ID.
+    required: true
+  oauth-secret:
+    description: Tailscale OAuth client secret.
+    required: true
+  tags:
+    description: Tailscale tags for the ephemeral runner node.
+    required: false
+    default: tag:gazua-gha
+  ping:
+    description: Tailnet IP/host to ping after connecting.
+    required: false
+    default: 100.111.241.61
+
+runs:
+  using: composite
+  steps:
+    - name: Connect to Tailnet
+      uses: tailscale/github-action@v4
+      with:
+        oauth-client-id: ${{ inputs.oauth-client-id }}
+        oauth-secret: ${{ inputs.oauth-secret }}
+        tags: ${{ inputs.tags }}
+        ping: ${{ inputs.ping }}
