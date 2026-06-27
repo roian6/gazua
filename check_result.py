@@ -377,7 +377,12 @@ def run(playwright: Playwright, config: Config) -> None:
             LOG.debug(f"  {idx}. {', '.join(nums)}")
 
         LOG.info(f"{latest_draw_no}회 당첨 결과 조회 시작")
-        result = fetch_lotto_result_by_round(latest_draw_no)
+        result = fetch_lotto_result_by_round(
+            latest_draw_no,
+            proxy_address=config.proxy_address,
+            proxy_user=config.proxy_user,
+            proxy_pw=config.proxy_pw,
+        )
         if not result:
             msg = f"{latest_draw_no}회 당첨 결과를 가져오지 못했습니다. 아직 추첨 전이거나 결과가 집계 중일 수 있습니다."
             LOG.warning(msg)

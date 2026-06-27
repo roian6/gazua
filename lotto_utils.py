@@ -60,6 +60,21 @@ def as_int(value: Any) -> int:
         return 0
 
 
+def apply_proxy_to_session(
+    session: Session,
+    proxy_address: Optional[str] = None,
+    proxy_user: Optional[str] = None,
+    proxy_pw: Optional[str] = None,
+) -> Session:
+    if proxy_address:
+        auth = ""
+        if proxy_user and proxy_pw:
+            auth = f"{quote(proxy_user, safe='')}:{quote(proxy_pw, safe='')}@"
+        proxy_url = f"http://{auth}{proxy_address}"
+        session.proxies.update({"http": proxy_url, "https": proxy_url})
+    return session
+
+
 def build_session_from_context(
     context,
     proxy_address: Optional[str] = None,
@@ -70,12 +85,7 @@ def build_session_from_context(
     for cookie in context.cookies():
         session.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"])
 
-    if proxy_address:
-        auth = ""
-        if proxy_user and proxy_pw:
-            auth = f"{quote(proxy_user, safe='')}:{quote(proxy_pw, safe='')}@"
-        proxy_url = f"http://{auth}{proxy_address}"
-        session.proxies.update({"http": proxy_url, "https": proxy_url})
+    apply_proxy_to_session(session, proxy_address, proxy_user, proxy_pw)
 
     session.headers.update({
         "User-Agent": USER_AGENT,
@@ -417,8 +427,13 @@ def fetch_today_purchase_numbers(
     return [], {"attempts": attempts}
 
 
-def fetch_latest_lotto_result() -> Optional[Tuple[int, Optional[str], List[str], Optional[str]]]:
-    res = Session().get(MAIN_INFO_URL, timeout=20)
+def fetch_latest_lotto_result(
+    proxy_address: Optional[str] = None,
+    proxy_user: Optional[str] = None,
+    proxy_pw: Optional[str] = None,
+) -> Optional[Tuple[int, Optional[str], List[str], Optional[str]]]:
+    session = apply_proxy_to_session(Session(), proxy_address, proxy_user, proxy_pw)
+    res = session.get(MAIN_INFO_URL, timeout=20)
     res.raise_for_status()
     payload = res.json()
     lt645_list = (
@@ -445,6 +460,9 @@ def fetch_latest_lotto_result() -> Optional[Tuple[int, Optional[str], List[str],
 
 def fetch_lotto_result_by_round(
     draw_no: int,
+    proxy_address: Optional[str] = None,
+    proxy_user: Optional[str] = None,
+    proxy_pw: Optional[str] = None,
 ) -> Optional[Tuple[int, Optional[str], List[str], Optional[str]]]:
     """Fetch lotto result for a specific round.
     
@@ -453,7 +471,8 @@ def fetch_lotto_result_by_round(
     """
     url = f"https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd={draw_no}"
     try:
-        res = Session().get(url, timeout=20)
+        session = apply_proxy_to_session(Session(), proxy_address, proxy_user, proxy_pw)
+        res = session.get(url, timeout=20)
         res.raise_for_status()
         response = res.json()
         

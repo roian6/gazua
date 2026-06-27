@@ -1,4 +1,7 @@
+from requests import Session
+
 from lotto_utils import (
+    apply_proxy_to_session,
     as_int,
     entry_matches_date,
     extract_numbers_from_entry,
@@ -10,6 +13,12 @@ def test_as_int_handles_invalid():
     assert as_int("10") == 10
     assert as_int("abc") == 0
     assert as_int(None) == 0
+
+
+def test_apply_proxy_to_session_sets_http_and_https_proxy_with_escaped_auth():
+    session = apply_proxy_to_session(Session(), "100.111.241.61:3128", "user name", "p@ss/word")
+    expected = "http://user%20name:p%40ss%2Fword@100.111.241.61:3128"
+    assert session.proxies == {"http": expected, "https": expected}
 
 
 def test_extract_numbers_from_text_single_group():
