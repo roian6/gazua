@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -6,27 +7,50 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from config import LOGIN_URL
 
+LOGIN_DESTINATION_PATTERN = re.compile(
+    r"/(?:main(?:[/?#]|$)|mbrsrvc/ExpryPswdNoti(?:[/?#]|$))"
+)
+PASSWORD_CHANGE_NOTICE_PATH = "/mbrsrvc/ExpryPswdNoti"
+
 
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
     page.wait_for_selector("#inpUserId", state="visible", timeout=timeout_ms)
-    
+
     # type()을 사용해야 onkeyup 이벤트 발생 -> enterUserLogin() -> RSA 암호화
     id_input = page.locator("#inpUserId")
     id_input.click()
     id_input.fill("")
     id_input.type(user_id, delay=50)
-    
+
     pw_input = page.locator("#inpUserPswdEncn")
     pw_input.click()
     pw_input.fill("")
     pw_input.type(user_pw, delay=50)
-    
+
     page.wait_for_timeout(500)
     page.locator("#btnLogin").click()
-    
+
     try:
-        page.wait_for_url("**/main*", timeout=timeout_ms, wait_until="domcontentloaded")
+        page.wait_for_url(
+            LOGIN_DESTINATION_PATTERN,
+            timeout=timeout_ms,
+            wait_until="domcontentloaded",
+        )
+        if PASSWORD_CHANGE_NOTICE_PATH in page.url:
+            page.wait_for_function(
+                """() => ['passwdNoti', 'kisaNoti'].some((id) => {
+                    const element = document.getElementById(id);
+                    return element && window.getComputedStyle(element).display !== 'none';
+                })""",
+                timeout=timeout_ms,
+            )
+            if not page.locator("#passwdNoti").is_visible():
+                raise RuntimeError("보안 관련 비밀번호 변경 안내가 표시되어 자동으로 건너뛰지 않습니다.")
+            page.locator("#btnCancel").click()
+            page.wait_for_url(
+                "**/main*", timeout=timeout_ms, wait_until="domcontentloaded"
+            )
     except PlaywrightTimeoutError:
         if "/login" in page.url:
             raise RuntimeError(f"로그인 시간 초과. 현재 URL: {page.url}")
