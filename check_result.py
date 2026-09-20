@@ -293,6 +293,49 @@ def _parse_purchases_from_table(page) -> List[Tuple[int, List[List[str]]]]:
     return purchases
 
 
+def collect_purchases(page, timeout_ms: int) -> List[Tuple[int, List[List[str]]]]:
+    """Collect purchases from the authenticated API before using page fallbacks."""
+    try:
+        purchases = _parse_purchases_from_api(page)
+    except Exception as exc:
+        LOG.warning(f"구매 내역 API 파싱 실패: {exc}")
+        purchases = []
+
+    if purchases:
+        return purchases
+
+    LOG.info("API에서 구매 내역을 찾지 못함. 구매 내역 페이지에서 재시도")
+    ledger_url = "https://www.dhlottery.co.kr/mypage/mylotteryledger"
+    page.goto(
+        ledger_url,
+        wait_until="domcontentloaded",
+        timeout=min(timeout_ms, 30_000),
+    )
+    _click_search_with_monthly_range(page)
+
+    try:
+        purchases = _parse_purchases_from_list(page)
+    except Exception as exc:
+        LOG.error(f"리스트 파싱 실패: {exc}")
+        purchases = []
+
+    if not purchases:
+        try:
+            purchases = _parse_purchases_from_table(page)
+        except Exception as exc:
+            LOG.error(f"테이블 파싱 실패: {exc}")
+            purchases = []
+
+    if not purchases:
+        body_text = page.locator("body").inner_text()
+        draw_no = extract_draw_number_from_text(body_text)
+        nums = extract_numbers_from_text(body_text)
+        if draw_no and nums:
+            purchases.append((draw_no, nums))
+
+    return purchases
+
+
 def run(playwright: Playwright, config: Config) -> None:
     browser = None
     context = None
@@ -308,47 +351,8 @@ def run(playwright: Playwright, config: Config) -> None:
         login(page, config.user_id, config.user_pw, timeout_ms=config.timeout_ms)
         LOG.info("로그인 완료")
 
-        LOG.info("구매/당첨 내역 페이지로 이동")
-        ledger_url = "https://www.dhlottery.co.kr/mypage/mylotteryledger"
-        LOG.debug(f"Ledger URL: {ledger_url}")
-        page.goto(ledger_url, wait_until="domcontentloaded")
-        LOG.info(f"구매/당첨 내역 페이지 로드 완료. 현재 URL: {page.url}")
-
-        LOG.info("조회 기간을 최근 1개월로 설정")
-        _click_search_with_monthly_range(page)
-
-        purchases: List[Tuple[int, List[List[str]]]] = []
-
-        try:
-            purchases = _parse_purchases_from_api(page)
-        except Exception as e:
-            LOG.error(f"API 파싱 실패: {e}")
-
-        if not purchases:
-            LOG.info("API에서 구매 내역을 찾지 못함. 리스트에서 재시도")
-            try:
-                purchases = _parse_purchases_from_list(page)
-            except Exception as e:
-                LOG.error(f"리스트 파싱 실패: {e}")
-
-        if not purchases:
-            LOG.info("리스트에서 구매 내역을 찾지 못함. 테이블에서 재시도")
-            try:
-                purchases = _parse_purchases_from_table(page)
-            except Exception as e:
-                LOG.error(f"테이블 파싱 실패: {e}")
-
+        purchases = collect_purchases(page, timeout_ms=config.timeout_ms)
         LOG.info(f"추출한 구매 건수: {len(purchases)}")
-
-        if not purchases:
-            LOG.info("구매 내역을 찾지 못함. body 텍스트에서 재시도")
-            body_text = page.locator("body").inner_text()
-            LOG.debug(f"Body 텍스트 (처음 500자): {body_text[:500]}")
-            draw_no = extract_draw_number_from_text(body_text)
-            nums = extract_numbers_from_text(body_text)
-            LOG.info(f"Body에서 추출: 회차={draw_no}, 번호 그룹 수={len(nums) if nums else 0}")
-            if draw_no and nums:
-                purchases.append((draw_no, nums))
 
         if not purchases:
             LOG.warning("구매 내역을 찾지 못함")

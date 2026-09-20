@@ -63,7 +63,7 @@ def capture_screenshot(page, debug_dir: str, name_prefix: str) -> Optional[str]:
         os.makedirs(debug_dir, exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(debug_dir, f"{name_prefix}_{timestamp}.png")
-        page.screenshot(path=path, full_page=True)
+        page.screenshot(path=path, full_page=True, timeout=10_000)
         return path
     except Exception:
         return None
@@ -74,8 +74,12 @@ def save_page_html(page, debug_dir: str, name_prefix: str) -> Optional[str]:
         os.makedirs(debug_dir, exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(debug_dir, f"{name_prefix}_{timestamp}.html")
+        html = page.locator("html").evaluate(
+            "element => element.outerHTML",
+            timeout=10_000,
+        )
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(page.content())
+            handle.write(html)
         return path
     except Exception:
         return None

@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lotto_web import login
+from lotto_web import capture_screenshot, login, save_page_html
 
 PASSWORD_NOTICE_URL = "https://www.dhlottery.co.kr/mbrsrvc/ExpryPswdNoti"
 MAIN_URL = "https://www.dhlottery.co.kr/main"
@@ -44,3 +44,29 @@ def test_login_does_not_defer_security_password_notice():
         login(page, "user", "password")
 
     locators["#btnCancel"].click.assert_not_called()
+
+
+def test_capture_screenshot_has_a_bounded_timeout(tmp_path):
+    page = MagicMock()
+
+    path = capture_screenshot(page, str(tmp_path), "failure")
+
+    assert path is not None
+    page.screenshot.assert_called_once()
+    assert page.screenshot.call_args.kwargs["timeout"] == 10_000
+
+
+def test_save_page_html_has_a_bounded_timeout(tmp_path):
+    page = MagicMock()
+    html = page.locator.return_value
+    html.evaluate.return_value = "<html><body>failure</body></html>"
+
+    path = save_page_html(page, str(tmp_path), "failure")
+
+    assert path is not None
+    html.evaluate.assert_called_once_with(
+        "element => element.outerHTML",
+        timeout=10_000,
+    )
+    assert open(path, encoding="utf-8").read() == "<html><body>failure</body></html>"
+    page.content.assert_not_called()
