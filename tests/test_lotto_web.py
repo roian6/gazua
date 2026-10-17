@@ -46,6 +46,24 @@ def test_login_does_not_defer_security_password_notice():
     locators["#btnCancel"].click.assert_not_called()
 
 
+def test_login_reports_scheduled_maintenance_without_waiting_for_fields():
+    page = MagicMock()
+    page.title.return_value = "시스템 점검 페이지"
+    page.locator.return_value.inner_text.return_value = (
+        "시스템 점검중 입니다.\n"
+        "점검내용 : 시스템 정기 점검\n"
+        "점검시간 : 2026.10.18 00시~2026.10.18 04시"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="동행복권 시스템 정기 점검 중.*2026.10.18 00시~2026.10.18 04시",
+    ):
+        login(page, "user", "password")
+
+    page.wait_for_selector.assert_not_called()
+
+
 def test_capture_screenshot_has_a_bounded_timeout(tmp_path):
     page = MagicMock()
 

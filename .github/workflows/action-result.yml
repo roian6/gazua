@@ -2,7 +2,7 @@ name: Check The Result Of Lotto (로또 결과봇)
 
 on:
   schedule:
-    - cron: "20 13 * * 6" # UTC 13:20 = KST 22:20 (토요일 밤, 추첨 후)
+    - cron: "20 19 * * 6" # UTC Sat 19:20 = KST Sun 04:20 (정기점검 종료 후)
   workflow_dispatch:
 
 jobs:

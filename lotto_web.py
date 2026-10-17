@@ -15,6 +15,13 @@ PASSWORD_CHANGE_NOTICE_PATH = "/mbrsrvc/ExpryPswdNoti"
 
 def login(page, user_id: str, user_pw: str, timeout_ms: int = 30000) -> None:
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+
+    if "시스템 점검" in page.title():
+        body_text = page.locator("body").inner_text(timeout=min(timeout_ms, 5_000))
+        schedule_match = re.search(r"점검시간\s*:\s*([^\n]+)", body_text)
+        schedule = schedule_match.group(1).strip() if schedule_match else "종료 시간 미정"
+        raise RuntimeError(f"동행복권 시스템 정기 점검 중 ({schedule})")
+
     page.wait_for_selector("#inpUserId", state="visible", timeout=timeout_ms)
 
     # type()을 사용해야 onkeyup 이벤트 발생 -> enterUserLogin() -> RSA 암호화
